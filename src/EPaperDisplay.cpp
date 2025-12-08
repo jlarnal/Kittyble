@@ -36,7 +36,10 @@ bool EPaperDisplay::begin()
     return true;
 }
 
-void EPaperDisplay::startTask() { xTaskCreate(_displayTask, "Display Task", 4096, this, 4, NULL); }
+void EPaperDisplay::startTask()
+{
+    xTaskCreate(_displayTask, "Display Task", 4096, this, 4, &_displayTaskHandle);
+}
 
 
 
@@ -208,9 +211,33 @@ void EPaperDisplay::_displayTask(void* pvParameters)
 
     for (;;) {
         instance->_updateDisplay();
-        vTaskDelay(pdMS_TO_TICKS(10000));
+        ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(10000));
     }
 }
+
+void EPaperDisplay::forceUpdate()
+{
+    if (_displayTaskHandle == NULL) {
+        ESP_LOGE(TAG, "Cannot force display update: Task Handle is NULL");
+        return;
+    }
+
+    // Check if we are running inside an Interrupt Service Routine (ISR)
+    if (xPortInIsrContext()) {
+        BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+        vTaskNotifyGiveFromISR(_displayTaskHandle, &xHigherPriorityTaskWoken);
+
+        // If the display task has higher priority than the current task,
+        // yield immediately so it runs right now.
+        if (xHigherPriorityTaskWoken) {
+            portYIELD_FROM_ISR();
+        }
+    } else {
+        // Standard Task-to-Task notification
+        xTaskNotifyGive(_displayTaskHandle);
+    }
+}
+
 
 void EPaperDisplay::_updateDisplay()
 {
@@ -235,12 +262,12 @@ void EPaperDisplay::_updateDisplay()
     _clearDisplay();
     _display->setFont(&Picopixel);
     _display->setTextSize(2);
-    
+
     _display->setCursor(_display->width() - 32, 11);
     _display->print(_deviceState.batteryLevel);
     _display->print('%');
-    
- 
+
+
     _display->setTextSize(1);
     _display->setFont(&FreeSans9pt7b);
 

@@ -33,8 +33,10 @@ Battery battMon(3000, 4200, BATT_HALFV_PIN);
 static const char* TAG    = "main";
 static const char* OTATAG = "OTA update";
 
-#ifndef KIBBLET5_DEBUG_ENABLED
+#if !defined(KIBBLET5_DEBUG_ENABLED) && defined(LOG_TO_FILE_ENABLED)
 #define LOG_TO_SPIFFS
+#elif defined(KIBBLET5_DEBUG_ENABLED)
+static void printSPIFFSTree(fs::FS& fs, const char* path, uint8_t depth = 0);
 #endif
 
 // --- Prototypes for RTOS Tasks ---
@@ -120,6 +122,9 @@ void setup()
 
 #ifdef KIBBLET5_DEBUG_ENABLED
     // --- RUN DIAGNOSTIC AND TEST CLI ---
+    Serial.print("\r\n=== Content of the SPIFFS partition ===\r\n");
+    printSPIFFSTree(SPIFFS, "/");
+    Serial.print("\r\n===end of SPIFFS content enumeration ===\r\n");
     doDebugTest(tankManager, scale);
 #endif
 
@@ -168,6 +173,10 @@ void loop()
 
 void battAndOTA_Task(void* pvParameters)
 {
+    constexpr uint32_t BATTERY_SAMPLING_PERIOD_MS = 500;
+    constexpr size_t REPORTS_PERIOD               = 5000 / BATTERY_SAMPLING_PERIOD_MS;
+
+    size_t reports = REPORTS_PERIOD;
     if (pvParameters == nullptr) {
         ESP_LOGE(TAG, "Battery object pointer was null in `batteryTask`");
         return;
@@ -178,13 +187,15 @@ void battAndOTA_Task(void* pvParameters)
 
     Battery* pBatt = (Battery*)pvParameters;
     pBatt->begin(3300, 0.5f, asigmoidal);
-
+    uint16_t voltage;
     for (;;) {
-
-        globalDeviceState.batteryLevel = pBatt->level();
-        Serial.printf("Battery level: %d%% (%dmV) - ", pBatt->level(), pBatt->voltage());
-        Serial.printf("Raw measure: %dmv\n", 2 * analogReadMilliVolts(BATT_HALFV_PIN));
-        vTaskDelay(pdMS_TO_TICKS(5000));
+        pBatt->refreshAverage();
+        pBatt->getAverages(&voltage, &globalDeviceState.batteryLevel);
+        if (!reports--) {
+            Serial.printf("Battery status: %dmV, %d%%\r\n", voltage, globalDeviceState.batteryLevel);
+            reports = REPORTS_PERIOD;
+        }
+        vTaskDelay(pdMS_TO_TICKS(BATTERY_SAMPLING_PERIOD_MS));
     }
 }
 
@@ -251,6 +262,45 @@ void feedingTask(void* pvParameters)
     }
 }
 
+#ifdef KIBBLET5_DEBUG_ENABLED
+static void printIndent(uint8_t depth)
+{
+    for (uint8_t i = 0; i < depth; ++i)
+        Serial.print("  "); // two spaces per level
+}
+
+static void printSPIFFSTree(fs::FS& fs, const char* path, uint8_t depth)
+{
+    File dir = fs.open(path);
+    if (!dir) {
+        Serial.printf("Failed to open '%s'\n", path);
+        return;
+    }
+    if (!dir.isDirectory()) {
+        Serial.printf("'%s' is not a directory\n", path);
+        dir.close();
+        return;
+    }
+
+    File file = dir.openNextFile();
+    while (file) {
+        // name() returns the full path (e.g. /folder/file.txt)
+        const char* name = file.name();
+        if (file.isDirectory()) {
+            printIndent(depth);
+            Serial.printf("└─ %s/\n", name);
+            // recurse into subdirectory
+            printSPIFFSTree(fs, name, depth + 1);
+        } else {
+            printIndent(depth);
+            Serial.printf("└─ %s\t%u bytes\n", name, (unsigned int)file.size());
+        }
+        file.close();
+        file = dir.openNextFile();
+    }
+    dir.close();
+}
+#endif
 
 #ifdef LOG_TO_SPIFFS
 bool open_spiffs_log()
@@ -271,5 +321,7 @@ int log_to_spiff(const char* format, va_list args)
     Serial.printf("Wrote %d chars to log.\r\n", result);
     return result;
 }
+
+
 
 #endif // LOG_TO_SPIFFS

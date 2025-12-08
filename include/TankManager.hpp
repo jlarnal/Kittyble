@@ -95,7 +95,7 @@ struct TankInfo {
         TID_ALL = TID_NAME_CHANGED | TID_SPECS_CHANGED | TID_MAC_CHANGED | TID_BUSINDEX_CHANGED | TID_REMAINING_CHANGED, // All fields have changed.
     };
 
-    void fillFromEeprom(TankEEpromData_t& eeprom);
+    bool fillFromEeprom(TankEEpromData_t& eeprom);
     /** @brief Updates a TankEEpromData_t structure from this TankInfo's fields.
      * @returns A combination of TankInfoDiscrepancies_e flags telling which fields of the eeprom have changed.
      */

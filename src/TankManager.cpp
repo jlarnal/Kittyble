@@ -146,6 +146,9 @@ void TankManager::_tankDetectionTask(void* pvParam)
     TankManager* pInst = (TankManager*)pvParam;
     SwiMuxPresenceReport_t currReport;
     uint16_t presenceChanges, prevPresences = 0;
+
+
+    // Task loop
     while (1) {
         if (pInst->_swiMux.isAsleep() && !pInst->_isServoMode) {
             currReport = pInst->_lastPresenceReport;
@@ -160,7 +163,7 @@ void TankManager::_tankDetectionTask(void* pvParam)
             if (presenceChanges)
                 pInst->refresh(presenceChanges);
         }
-        vTaskDelay(pdMS_TO_TICKS(250));
+        vTaskDelay(pdMS_TO_TICKS(1000));
     }
 }
 
@@ -231,11 +234,12 @@ void TankManager::presenceRefresh()
     }
 }
 
-void TankInfo::fillFromEeprom(TankEEpromData_t& eeprom)
+bool TankInfo::fillFromEeprom(TankEEpromData_t& eeprom)
 {
     // Sanitize eepromData beforehand
 
-    TankEEpromData_t::sanitize(eeprom);
+    if (!TankEEpromData_t::sanitize(eeprom))
+        return false;
 
 
     // tank.uid and tank.busIndex are supposed to be already filled in (by TankManager::presenceRefresh() )
@@ -251,6 +255,7 @@ void TankInfo::fillFromEeprom(TankEEpromData_t& eeprom)
     }
     servoIdlePwm = eeprom.records[0].servoIdlePwm;
     isFullInfo   = true;
+    return true;
 }
 
 
@@ -261,8 +266,8 @@ TankInfo::TankInfoDiscrepancies_e TankInfo::toTankData(TankEEpromData_t& eeprom)
     if (name.compare(0, sizeof(TankEEpromData_t::_RECORD_::name), (char*)&eeprom.records[0].name[0]) != 0) {
         result |= TID_NAME_CHANGED;
         // Copy the length-capped name string.
-        eeprom.records[0].nameLength = std::min(name.length() , (size_t)sizeof(TankEEpromData_t::_RECORD_::name));
-        strncpy((char*)&eeprom.records[0].name[0], name.c_str(), (size_t)eeprom.records[0].nameLength-1);
+        eeprom.records[0].nameLength = std::min(name.length(), (size_t)sizeof(TankEEpromData_t::_RECORD_::name));
+        strncpy((char*)&eeprom.records[0].name[0], name.c_str(), (size_t)eeprom.records[0].nameLength - 1);
     }
     // bus index
     if (busIndex != eeprom.records[0].history.lastBusIndex) {
@@ -338,9 +343,7 @@ void TankManager::refresh(uint16_t refreshMap)
         // Find if we have a tank currently registered at this bus index in our known list.
         TankInfo* knownTankOnBus = getKnownTankOfBus(busIndex);
 
-        if (isPresent) {
-            // A device is physically connected to this bus.
-
+        if (isPresent) { // A device is physically connected to this bus.
             // See if we know about this specific device (by UID), regardless of where it is.
             TankInfo* knownTankWithUid = getKnownTankOfUis(uidOnBus);
 
@@ -762,7 +765,7 @@ PCA9685::I2C_Result_e TankManager::stopAllServos()
 
 #pragma region Test methods for debug, to be commented out upon release
 
-
+#ifdef KIBBLET5_DEBUG_ENABLED
 
 SwiMuxPresenceReport_t TankManager::testSwiMuxAwaken()
 {
@@ -844,5 +847,7 @@ SwiMuxSerialResult_e TankManager::testSwiWrite(uint8_t busIndex, uint16_t addres
 {
     return _swiMux.write(busIndex, dataIn, address & 0xFF, length);
 }
+
+#endif // KIBBLET5_DEBUG_ENABLED
 
 #pragma endregion

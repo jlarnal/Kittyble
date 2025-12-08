@@ -1,5 +1,0 @@
-{
-  "dispenseWeightChangeThreshold": 3.0,
-  "dispensingNoWeightChangeTimeout_ms": 10000,
-  "scaleSamplesCount": 5
-}

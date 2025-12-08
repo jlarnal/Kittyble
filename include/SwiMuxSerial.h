@@ -62,8 +62,8 @@ enum SwiMuxSerialResult_e : uint8_t /* Includes proprietary values as well as va
 
 
 struct SwiMuxPresenceReport_t {
-    uint16_t presences;
-    uint8_t busesCount;
+    uint16_t presences; // Bit flags, each representing presence '1' or absence `0` of an EEPROM on each bus of the respective bus index/bit index.
+    uint8_t busesCount; // The actual count of connected EEPROMS.
 
     SwiMuxPresenceReport_t() : presences(0), busesCount(0) {}
     SwiMuxPresenceReport_t(uint16_t presenceMap, uint8_t maxDevices) : presences(presenceMap), busesCount(maxDevices) {}
@@ -100,10 +100,42 @@ class SwiMuxSerial_t {
      * @return <false> if no wake-up event has been detected. 
      */
     bool hasEvents(SwiMuxPresenceReport_t* reportOut = NULL);
+    /**
+     * @brief Gets a report about the presences of the 1kb EEPROMS (DS28E04/DS2431+) attached 1-to-1 on the 6 distinct buses of this SwiMux.
+     * @param timeout_ms Max time to wait for an answer from the SwiMux, in milliseconds
+     * @return A report of the current population of EEPROMS connected (and answering) to this SwiMux.
+     */
     SwiMuxPresenceReport_t getPresence(uint32_t timeout_ms = PRESENCE_TIMEOUT_MS);
+    /**
+     * @brief Gets an array of the UIDs (64-bits serial numbers) of each 1-wire EEPROM connected to the SwiMux's buses.
+     * @param uids The result of the roll call. Any missing/dead EEPROM is reported as UINT64_MAX (all 64 bits set).
+     * @return SwiMuxSerialResult_e::SMREZ_OK is the roll call succeeded.
+     */
     SwiMuxSerialResult_e rollCall(RollCallArray_t& uids, uint32_t timeout_ms = ROLLCALL_TIMEOUT_MS);
+    /**
+     * @brief Read a span of bytes from the EEPROM on a specified bus.
+     * @param busIndex Bus from which to read.
+     * @param bufferOut Recipient buffer of the read. Mustn't be null.
+     * @param offset Offset in EEPROM from which to start the read.
+     * @param len Number of bytes to read. Must be <= to the size of @p bufferOut
+     * @param timeout_ms Maximum amount of millisecond to wait for the result.
+     * @return SwiMuxSerialResult_e::SMREZ_OK if the read succeeded.
+     */
     SwiMuxSerialResult_e read(uint8_t busIndex, uint8_t* bufferOut, uint8_t offset, uint8_t len, uint32_t timeout_ms = READ_TIMEOUT_MS);
+    /**
+     * @brief Writes a span of bytes to the EEPROM on the specified bus.
+    *  @param busIndex Bus to write to which.
+     * @param bufferIn Input data to write in EEPROM. Mustn't be null.
+     * @param offset Offset in EEPROM from which to start the write.
+     * @param len Number of bytes to write. Must be <= to the size of @p bufferOut
+     * @return SwiMuxSerialResult_e::SMREZ_OK if the write succeeded.
+     */
     SwiMuxSerialResult_e write(uint8_t busIndex, const uint8_t* bufferIn, uint8_t offset, uint8_t len, uint32_t timeout_ms = WRITE_TIMEOUT_MS);
+    /** @brief Gets the UID of the device present (or not) on the specified bus.
+     * @param busIndex Index of the bus to interrogate.
+     * @param &result Reference to the variable that will store the result. It will be UINT64_MAX if nothing's on @p busIndex.
+     * @result SwiMuxSerialResult_e::SMREZ_OK if the SwiMux interrogated the bus, EEPROM present or not.
+     */
     SwiMuxSerialResult_e getUid(uint8_t busIndex, uint64_t& result, uint32_t timeout_ms = GETUID_TIMEOUT_MS);
 
 

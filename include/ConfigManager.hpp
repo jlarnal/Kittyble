@@ -20,10 +20,13 @@ struct Recipe {
     std::string name;
     // The ingredients vector now holds percentages.
     std::vector<RecipeIngredient> ingredients;
-    long created;
-    long lastUsed;
+    long long created;
+    long long lastUsed;
     double dailyWeight;
     int servings;
+    bool isEnabled;
+
+    static const Recipe EMPTY;
 };
 
 class ConfigManager {

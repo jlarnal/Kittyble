@@ -276,6 +276,15 @@ void WebServer::_handleWifiSave(AsyncWebServerRequest* request)
 void WebServer::startAPIServer()
 {
     _server.reset();
+
+#ifdef DEBUG_HTTP_ENABLED
+    // Global Request Logger using Middleware
+    _server.addMiddleware(new AsyncMiddlewareFunction([](AsyncWebServerRequest* request, ArMiddlewareNext next) {
+        ESP_LOGI(TAG, "[HTTP] %s %s", request->methodToString(), request->url().c_str());
+        next(); // Important: proceed to the next middleware/handler
+    }));
+#endif //DEBUG_HTTP_ENABLED
+
     _setupAPIRoutes();
 
     // Serve static files with Gzip support
@@ -321,76 +330,81 @@ void WebServer::startAPIServer()
 void WebServer::_setupAPIRoutes()
 {
     // System Routes
-    _server.on("/system/info", HTTP_GET, std::bind(&WebServer::_handleGetSystemInfo, this, std::placeholders::_1));
-    _server.on("/system/status", HTTP_GET, std::bind(&WebServer::_handleGetSystemStatus, this, std::placeholders::_1));
-    _server.on("/system/restart", HTTP_POST, std::bind(&WebServer::_handleRestart, this, std::placeholders::_1));
-    _server.on("/system/factory-reset", HTTP_POST, std::bind(&WebServer::_handleFactoryReset, this, std::placeholders::_1));
-
-    // Settings Routes
-    _server.on("/settings", HTTP_GET, std::bind(&WebServer::_handleGetSettings, this, std::placeholders::_1));
+     _server.on("/api/status", HTTP_GET, std::bind(&WebServer::_handleGetStatus, this, std::placeholders::_1));
+   
+    _server.on("/api/system/info", HTTP_GET, std::bind(&WebServer::_handleGetSystemInfo, this, std::placeholders::_1));
+    _server.on("/api/system/restart", HTTP_POST, std::bind(&WebServer::_handleRestart, this, std::placeholders::_1));
+    _server.on("/api/system/factory-reset", HTTP_POST, std::bind(&WebServer::_handleFactoryReset, this, std::placeholders::_1));
     _server.on(
-      "/settings", HTTP_PUT, [this](AsyncWebServerRequest* r) {}, NULL,
+      "/api/system/time", HTTP_POST, [this](AsyncWebServerRequest* r) {}, NULL,
+      [this](AsyncWebServerRequest* r, uint8_t* d, size_t l, size_t i, size_t t) {
+          _handleBody(r, d, l, i, t, [this](AsyncWebServerRequest* req, JsonDocument& doc) { this->_handleSetTime(req, doc); });
+      });
+    // Settings Routes
+    _server.on("/api/settings", HTTP_GET, std::bind(&WebServer::_handleGetSettings, this, std::placeholders::_1));
+    _server.on(
+      "/api/settings", HTTP_PUT, [this](AsyncWebServerRequest* r) {}, NULL,
       [this](AsyncWebServerRequest* r, uint8_t* d, size_t l, size_t i, size_t t) {
           _handleBody(r, d, l, i, t, [this](AsyncWebServerRequest* req, JsonDocument& doc) { this->_handleUpdateSettings(req, doc); });
       });
-    _server.on("/settings/export", HTTP_GET, std::bind(&WebServer::_handleExportSettings, this, std::placeholders::_1));
+    _server.on("/api/settings/export", HTTP_GET, std::bind(&WebServer::_handleExportSettings, this, std::placeholders::_1));
 
     // Tank Routes
-    _server.on("/tanks", HTTP_GET, std::bind(&WebServer::_handleGetTanks, this, std::placeholders::_1));
+    _server.on("/api/tanks", HTTP_GET, std::bind(&WebServer::_handleGetTanks, this, std::placeholders::_1));
     _server.on(
-      "^/tanks/([0-9A-Fa-f]{16})$", HTTP_PUT, [this](AsyncWebServerRequest* r) {}, NULL,
+      "^/api/tanks/([0-9A-Fa-f]{16})$", HTTP_PUT, [this](AsyncWebServerRequest* r) {}, NULL,
       [this](AsyncWebServerRequest* r, uint8_t* d, size_t l, size_t i, size_t t) {
           _handleBody(r, d, l, i, t, [this](AsyncWebServerRequest* req, JsonDocument& doc) { this->_handleUpdateTank(req, doc); });
       });
-    _server.on("^/tanks/([0-9A-Fa-f]{16})/history$", HTTP_GET, std::bind(&WebServer::_handleGetTankHistory, this, std::placeholders::_1));
+    _server.on("^/api/tanks/([0-9A-Fa-f]{16})/history$", HTTP_GET, std::bind(&WebServer::_handleGetTankHistory, this, std::placeholders::_1));
 
     // Feeding Routes
     _server.on(
-      "^/feed/immediate/([0-9A-Fa-f]{16})$", HTTP_POST, [this](AsyncWebServerRequest* r) {}, NULL,
+      "^/api/feed/immediate/([0-9A-Fa-f]{16})$", HTTP_POST, [this](AsyncWebServerRequest* r) {}, NULL,
       [this](AsyncWebServerRequest* r, uint8_t* d, size_t l, size_t i, size_t t) {
           _handleBody(r, d, l, i, t, [this](AsyncWebServerRequest* req, JsonDocument& doc) { this->_handleFeedImmediate(req, doc); });
       });
     _server.on(
-      "^/feed/recipe/([0-9]+)$", HTTP_POST, [this](AsyncWebServerRequest* r) {}, NULL,
+      "^/api/feed/recipe/([0-9]+)$", HTTP_POST, [this](AsyncWebServerRequest* r) {}, NULL,
       [this](AsyncWebServerRequest* r, uint8_t* d, size_t l, size_t i, size_t t) {
           _handleBody(r, d, l, i, t, [this](AsyncWebServerRequest* req, JsonDocument& doc) { this->_handleFeedRecipe(req, doc); });
       });
-    _server.on("/feeding/stop", HTTP_POST, std::bind(&WebServer::_handleStopFeeding, this, std::placeholders::_1));
-    _server.on("/feeding/history", HTTP_GET, std::bind(&WebServer::_handleGetFeedingHistory, this, std::placeholders::_1));
+    _server.on("/api/feeding/stop", HTTP_POST, std::bind(&WebServer::_handleStopFeeding, this, std::placeholders::_1));
+    _server.on("/api/feeding/history", HTTP_GET, std::bind(&WebServer::_handleGetFeedingHistory, this, std::placeholders::_1));
 
     // Recipe Routes
-    _server.on("/recipes", HTTP_GET, std::bind(&WebServer::_handleGetRecipes, this, std::placeholders::_1));
+    _server.on("/api/recipes", HTTP_GET, std::bind(&WebServer::_handleGetRecipes, this, std::placeholders::_1));
     _server.on(
-      "/recipes", HTTP_POST, [this](AsyncWebServerRequest* r) {}, NULL,
+      "/api/recipes", HTTP_POST, [this](AsyncWebServerRequest* r) {}, NULL,
       [this](AsyncWebServerRequest* r, uint8_t* d, size_t l, size_t i, size_t t) {
           _handleBody(r, d, l, i, t, [this](AsyncWebServerRequest* req, JsonDocument& doc) { this->_handleAddRecipe(req, doc); });
       });
     _server.on(
-      "^/recipes/([0-9]+)$", HTTP_PUT, [this](AsyncWebServerRequest* r) {}, NULL,
+      "^/api/recipes/([0-9]+)$", HTTP_PUT, [this](AsyncWebServerRequest* r) {}, NULL,
       [this](AsyncWebServerRequest* r, uint8_t* d, size_t l, size_t i, size_t t) {
           _handleBody(r, d, l, i, t, [this](AsyncWebServerRequest* req, JsonDocument& doc) { this->_handleUpdateRecipe(req, doc); });
       });
-    _server.on("^/recipes/([0-9]+)$", HTTP_DELETE, std::bind(&WebServer::_handleDeleteRecipe, this, std::placeholders::_1));
+    _server.on("^/api/recipes/([0-9]+)$", HTTP_DELETE, std::bind(&WebServer::_handleDeleteRecipe, this, std::placeholders::_1));
 
     // Scale Routes
-    _server.on("/scale/current", HTTP_GET, std::bind(&WebServer::_handleGetScale, this, std::placeholders::_1));
-    _server.on("/scale/tare", HTTP_POST, std::bind(&WebServer::_handleTareScale, this, std::placeholders::_1));
+    _server.on("/api/scale/current", HTTP_GET, std::bind(&WebServer::_handleGetScale, this, std::placeholders::_1));
+    _server.on("/api/scale/tare", HTTP_POST, std::bind(&WebServer::_handleTareScale, this, std::placeholders::_1));
     _server.on(
-      "/scale/calibrate", HTTP_POST, [this](AsyncWebServerRequest* r) {}, NULL,
+      "/api/scale/calibrate", HTTP_POST, [this](AsyncWebServerRequest* r) {}, NULL,
       [this](AsyncWebServerRequest* r, uint8_t* d, size_t l, size_t i, size_t t) {
           _handleBody(r, d, l, i, t, [this](AsyncWebServerRequest* req, JsonDocument& doc) { this->_handleCalibrateScale(req, doc); });
       });
 
     // Diagnostics & Logs
-    _server.on("/diagnostics/sensors", HTTP_GET, std::bind(&WebServer::_handleGetSensorDiagnostics, this, std::placeholders::_1));
-    _server.on("/diagnostics/servos", HTTP_GET, std::bind(&WebServer::_handleGetServoDiagnostics, this, std::placeholders::_1));
-    _server.on("/network/info", HTTP_GET, std::bind(&WebServer::_handleGetNetworkInfo, this, std::placeholders::_1));
-    _server.on("/logs/system", HTTP_GET, std::bind(&WebServer::_handleGetSystemLogs, this, std::placeholders::_1));
-    _server.on("/logs/feeding", HTTP_GET, std::bind(&WebServer::_handleGetFeedingLogs, this, std::placeholders::_1));
+    _server.on("/api/diagnostics/sensors", HTTP_GET, std::bind(&WebServer::_handleGetSensorDiagnostics, this, std::placeholders::_1));
+    _server.on("/api/diagnostics/servos", HTTP_GET, std::bind(&WebServer::_handleGetServoDiagnostics, this, std::placeholders::_1));
+    _server.on("/api/network/info", HTTP_GET, std::bind(&WebServer::_handleGetNetworkInfo, this, std::placeholders::_1));
+    _server.on("/api/logs/system", HTTP_GET, std::bind(&WebServer::_handleGetSystemLogs, this, std::placeholders::_1));
+    _server.on("/api/logs/feeding", HTTP_GET, std::bind(&WebServer::_handleGetFeedingLogs, this, std::placeholders::_1));
 
     // OTA Update Route
     _server.on(
-      "/update", HTTP_POST,
+      "/api/update", HTTP_POST,
       [](AsyncWebServerRequest* request) {
           AsyncWebServerResponse* response = request->beginResponse(200, "text/plain", (Update.hasError()) ? "FAIL" : "OK");
           response->addHeader("Connection", "close");
@@ -422,14 +436,15 @@ void WebServer::_handleGetSystemInfo(AsyncWebServerRequest* request)
     request->send(200, "application/json", response);
 }
 
-void WebServer::_handleGetSystemStatus(AsyncWebServerRequest* request)
+void WebServer::_handleGetStatus(AsyncWebServerRequest* request)
 {
     JsonDocument doc;
-    if (xSemaphoreTake(_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
-        doc["operational"]   = _deviceState.operational;
-        doc["lastError"]     = _deviceState.lastError;
-        doc["safetyMode"]    = _deviceState.safetyModeEngaged;
-        doc["feedingStatus"] = _deviceState.currentFeedingStatus;
+    if (xSemaphoreTake(_mutex, pdMS_TO_TICKS(200)) == pdTRUE) {
+        doc["battery"]        = _deviceState.batteryLevel; // Integer (0-100). Current battery percentage.
+        doc["state"]          = _deviceState.getStateString(); // String. Enum: "IDLE", "FEEDING", "ERROR", "CALIBRATING".
+        doc["last_feed_time"] = _deviceState.lastFeedTime; // String. Time of the last successful feed (HH:MM format).
+        doc["last_recipe"]    = _deviceState.lastRecipe.name; // String. Name of the recipe last used.
+        doc["error"] = _deviceState.lastError;
         xSemaphoreGive(_mutex);
     } else {
         request->send(503, "application/json", "{\"error\":\"Could not acquire state lock\"}");
@@ -453,6 +468,44 @@ void WebServer::_handleFactoryReset(AsyncWebServerRequest* request)
     request->send(200, "application/json", "{\"success\":true, \"message\":\"Factory reset complete. Restarting in 3 seconds\"}");
     vTaskDelay(pdMS_TO_TICKS(3000));
     ESP.restart();
+}
+
+void WebServer::_handleSetTime(AsyncWebServerRequest* request, JsonDocument& doc)
+{
+    // 1. Validate that both required fields exist and are the correct type
+    if (!doc["epoch"].is<time_t>() || !doc["tz"].is<const char*>()) {
+        ESP_LOGW(TAG, "Invalid time payload received");
+        request->send(400, "application/json", "{\"error\":\"Missing 'epoch' or 'tz' in payload\"}");
+        return;
+    }
+
+    // 2. Extract the data
+    time_t epoch       = doc["epoch"];
+    const char* tzRule = doc["tz"];
+
+    // 3. Set the System Time (Hardware Clock)
+    // settimeofday expects UTC time.
+    struct timeval tv;
+    tv.tv_sec  = epoch;
+    tv.tv_usec = 0;
+
+    if (settimeofday(&tv, NULL) < 0) {
+        ESP_LOGE(TAG, "Failed to update system time");
+        request->send(500, "application/json", "{\"error\":\"Internal system error setting time\"}");
+        return;
+    }
+
+    // 4. Set the Timezone Environment Variable
+    // This applies the complex DST rules (e.g., CET vs CEST) automatically.
+    // The "1" as the third argument tells it to overwrite any existing value.
+    setenv("TZ", tzRule, 1);
+    tzset();
+
+    ESP_LOGI(TAG, "Time updated. Epoch: %ld, TZ: %s", (long)epoch, tzRule);
+
+    // 5. Send Success Response
+    request->send(200, "application/json", "{\"success\":true}");
+    _display.forceUpdate();
 }
 
 // --- Settings Handlers ---
@@ -549,7 +602,7 @@ void WebServer::_handleGetTanks(AsyncWebServerRequest* request)
             JsonObject tankObj         = tanksArray.add<JsonObject>();
             tankObj["uid"]             = tank.uid;
             tankObj["name"]            = tank.name;
-            tankObj["busIndex"]         = tank.busIndex;
+            tankObj["busIndex"]        = tank.busIndex;
             tankObj["wcapacity"]       = tank.w_capacity_kg * 1000;
             tankObj["remainingWeight"] = tank.remaining_weight_kg * 1000;
 

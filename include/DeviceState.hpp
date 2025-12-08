@@ -50,17 +50,28 @@ struct FeedingHistoryEntry {
     {}
 };
 
+enum DeviceOperationState_e : uint8_t
+{
+    DOPSTATE_IDLE,
+    DOPSTATE_FEEDING,
+    DOPSTATE_ERROR,
+    DOPSTATE_CALIBRATING,
+};
+
 // The central volatile state structure for the entire application.
 struct DeviceState {
     // System Status
-    bool operational       = true;
-    std::string lastError  = "";
-    bool safetyModeEngaged = false;
-    uint32_t uptime_s      = 0;
-    int8_t wifiStrength    = 0;
-    uint8_t batteryLevel   = 100;
+    bool operational                      = true;
+    DeviceOperationState_e operationState = DeviceOperationState_e::DOPSTATE_IDLE;
+    std::string lastError                 = "";
+    bool safetyModeEngaged                = false;
+    uint32_t uptime_s                     = 0;
+    int8_t wifiStrength                   = 0;
+    uint8_t batteryLevel                  = 100;
+    long long lastFeedTime                = 0;
+    Recipe lastRecipe                     = Recipe::EMPTY;
     IPAddress ipAddress;
-    std::string deviceName      = "KibbleT5";
+    std::string deviceName      = "Kittyble";
     std::string firmwareVersion = "1.1.0-stable";
     std::string buildDate       = __DATE__;
 
@@ -105,8 +116,24 @@ struct DeviceState {
         uint32_t _dispensingNoWeightChangeTimeout_ms;
         uint8_t _scaleSamplesCount;
     };
-    
+
     Settings_t Settings;
+
+    const char* getStateString()
+    {
+        switch (operationState) {
+
+            case DOPSTATE_FEEDING:
+                return "DOPSTATE_FEEDING";
+            case DOPSTATE_ERROR:
+                return "DOPSTATE_ERROR";
+            case DOPSTATE_CALIBRATING:
+                return "DOPSTATE_CALIBRATING";
+            default:
+                break;
+        }
+        return "IDLE";
+    }
 };
 
 extern DeviceState globalDeviceState;

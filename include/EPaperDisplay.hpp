@@ -13,7 +13,7 @@
  */
 
 class EPaperDisplay {
-public:
+  public:
     EPaperDisplay(DeviceState& deviceState, SemaphoreHandle_t& mutex);
     bool begin();
     void startTask();
@@ -25,20 +25,21 @@ public:
     void showStatus(const char* title, const char* message);
     void showError(const char* title, const char* message);
 
-private:
+    void forceUpdate();
+
+  private:
     DeviceState& _deviceState;
     SemaphoreHandle_t& _mutex;
+    TaskHandle_t _displayTaskHandle;
 
 
-    
     Ssd1680_Driver* _display;
 
     void _updateDisplay();
-    static void _displayTask(void *pvParameters);
-    
+    static void _displayTask(void* pvParameters);
+
     // Helper methods for common display operations
-    void _clearDisplay(){ _display->clearBuffer();  /* _display->fillScreen(EPD_WHITE); */ }
-    
+    void _clearDisplay() { _display->clearBuffer(); /* _display->fillScreen(EPD_WHITE); */ }
 };
 
 #endif // EPAPERDISPLAY_HPP

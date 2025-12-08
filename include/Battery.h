@@ -21,11 +21,16 @@
 
 #include <Arduino.h>
 
-typedef uint8_t(*mapFn_t)(uint16_t, uint16_t, uint16_t);
+typedef uint8_t (*mapFn_t)(uint16_t, uint16_t, uint16_t);
+
+// Standard mapping functions provided by the library
+uint8_t linear(uint16_t voltage, uint16_t minVoltage, uint16_t maxVoltage);
+uint8_t sigmoidal(uint16_t voltage, uint16_t minVoltage, uint16_t maxVoltage);
+uint8_t asigmoidal(uint16_t voltage, uint16_t minVoltage, uint16_t maxVoltage);
 
 class Battery {
-	public:
-		/**
+  public:
+    /**
 		 * Creates an instance to monitor battery voltage and level.
 		 * Initialization parameters depend on battery type and configuration.
 		 *
@@ -33,101 +38,83 @@ class Battery {
 		 * @param maxVoltage is the voltage, expressed in millivolts, corresponding to a full battery
 		 * @param sensePin is the analog pin used for sensing the battery voltage
 		 * @param adcBits is the number of bits the ADC uses (defaults to 10)
+     * @param averaging_samples is the number of samples for the rolling average window (defaults to 10)
 		 */
-		Battery(uint16_t minVoltage, uint16_t maxVoltage, uint8_t sensePin, uint8_t adcBits = 10);
+    Battery(uint16_t minVoltage, uint16_t maxVoltage, uint8_t sensePin, uint8_t adcBits = 10, uint16_t averaging_samples = 10);
+    
+    /**
+     * Destructor to free the averaging window buffer.
+     */
+    ~Battery();
 
-		/**
+    /**
 		 * Initializes the library by optionally setting additional parameters.
 		 * To obtain the best results use a calibrated reference using the VoltageReference library or equivalent.
-		 * 
-		 * @param refVoltage is the board reference voltage, expressed in millivolts
+		 * * @param refVoltage is the board reference voltage, expressed in millivolts
 		 * @param dividerRatio is the multiplier used to obtain the real battery voltage
 		 * @param mapFunction is a pointer to the function used to map the battery voltage to the remaining capacity percentage (defaults to linear mapping)
 		 */
-		void begin(uint16_t refVoltage, float dividerRatio, mapFn_t = 0);
+    void begin(uint16_t refVoltage, float dividerRatio, mapFn_t = 0);
 
-		/**
+    /**
 		 * Enables on-demand activation of the sensing circuit to limit battery consumption.
 		 *
 		 * @param activationPin is the pin which will be turned HIGH or LOW before starting the battery sensing
-		 * @param activationMode is the optional value to set on the activationPin to enable battery sensing, defaults to LOW
-		 *            useful when using a resistor divider to save on battery consumption, but it can be changed to HIGH in case
-		 *            you are using a P-CH MOSFET or a PNP BJT
+		 * @param activationMode is the mode (HIGH or LOW) to activate the sensing circuit (defaults to HIGH)
 		 */
-		void onDemand(uint8_t activationPin, uint8_t activationMode = LOW);
+    void onDemand(uint8_t activationPin, uint8_t activationMode = HIGH);
 
-		/**
-		 * Activation pin value disabling the on-demand feature.
+    /**
+		 * Reads the battery voltage.
+		 *
+		 * @return the battery voltage expressed in millivolts
 		 */
-		static const uint8_t ON_DEMAND_DISABLE = 0xFF;
+    uint16_t voltage();
 
-		/**
-		 * Returns the current battery level as a number between 0 and 100, with 0 indicating an empty battery and 100 a
-		 * full battery.
+    /**
+		 * Reads the remaining battery capacity.
+		 *
+		 * @param voltage is the battery voltage, if not provided it will be read from the sensor
+		 * @return the remaining battery capacity expressed in percentage (0-100)
 		 */
-		uint8_t level();
-		uint8_t level(uint16_t voltage);
+    uint8_t level(uint16_t voltage = 0);
+    
+    /**
+     * Updates the rolling average by taking a new sample using voltageFast(100).
+     */
+    void refreshAverage();
 
-		/**
-		 * Returns the current battery voltage in millivolts.
-		 * @param delay is the amount of milliseconds to wait to allow the ADC input voltage to stabilize (defaults to 2ms)
-		 */
-		uint16_t voltage(uint8_t delay = 2);
+    /**
+     * @brief Gets the current rolling average voltage and level of the battery.
+     *
+     * @param[out] milliVoltsOut Pointer to a value receiving the average voltage of the battery, expressed in milliVolts.
+     * @param[out] levelOut Pointer to a value receiving the average level [0..100] of the battery.
+     */    
+    void getAverages(uint16_t *milliVoltsOut, uint8_t *levelOut);
 
-	private:
-		uint16_t refVoltage;
-		uint16_t minVoltage;
-		uint16_t maxVoltage;
-		float dividerRatio;
-		uint8_t sensePin;
-		uint8_t activationPin;
-		uint8_t activationMode;
-		mapFn_t mapFunction;
+  private:
+    /**
+     * Reads the battery voltage by averaging a specific number of samples immediately.
+     * * @param samples the number of samples to average
+     * @return the battery voltage expressed in millivolts
+     */
+    uint16_t voltageFast(uint16_t samples);
 
-		const uint16_t adc;
+    uint16_t _minVoltage;
+    uint16_t _maxVoltage;
+    uint8_t _sensePin;
+    uint8_t _adcBits;
+    uint16_t _refVoltage;
+    float _dividerRatio;
+    mapFn_t _mapFunc;
+    uint8_t _activationPin;
+    uint8_t _activationMode;
+    
+    // Rolling average variables
+    uint16_t _averaging_samples;
+    uint16_t *_window;
+    uint16_t _windowIndex;
+    uint64_t _accumulator;
 };
 
-//
-// Plots of the functions below available at
-// https://www.desmos.com/calculator/x0esk5bsrk
-//
-
-/**
- * Symmetric sigmoidal approximation
- * https://www.desmos.com/calculator/7m9lu26vpy
- *
- * c - c / (1 + k*x/v)^3
- */
-static inline uint8_t sigmoidal(uint16_t voltage, uint16_t minVoltage, uint16_t maxVoltage) {
-	// slow
-	// uint8_t result = 110 - (110 / (1 + pow(1.468 * (voltage - minVoltage)/(maxVoltage - minVoltage), 6)));
-
-	// steep
-	// uint8_t result = 102 - (102 / (1 + pow(1.621 * (voltage - minVoltage)/(maxVoltage - minVoltage), 8.1)));
-
-	// normal
-	uint8_t result = 105 - (105 / (1 + pow(1.724 * (voltage - minVoltage)/(maxVoltage - minVoltage), 5.5)));
-	return result >= 100 ? 100 : result;
-}
-
-/**
- * Asymmetric sigmoidal approximation
- * https://www.desmos.com/calculator/oyhpsu8jnw
- *
- * c - c / [1 + (k*x/v)^4.5]^3
- */
-static inline uint8_t asigmoidal(uint16_t voltage, uint16_t minVoltage, uint16_t maxVoltage) {
-	uint8_t result = 101 - (101 / pow(1 + pow(1.33 * (voltage - minVoltage)/(maxVoltage - minVoltage) ,4.5), 3));
-	return result >= 100 ? 100 : result;
-}
-
-/**
- * Linear mapping
- * https://www.desmos.com/calculator/sowyhttjta
- *
- * x * 100 / v
- */
-static inline uint8_t linear(uint16_t voltage, uint16_t minVoltage, uint16_t maxVoltage) {
-	return (unsigned long)(voltage - minVoltage) * 100 / (maxVoltage - minVoltage);
-}
-#endif // BATTERY_H_
+#endif
