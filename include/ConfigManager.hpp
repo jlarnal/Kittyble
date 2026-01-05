@@ -52,6 +52,7 @@ public:
     bool saveRecipes(const std::vector<Recipe>& recipes);
     std::vector<Recipe> loadRecipes();
 
+ 
     // Factory Reset
     bool factoryReset();
 

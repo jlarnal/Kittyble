@@ -6,12 +6,13 @@
 #include <cstring>
 #include <cmath>
 #include <cstddef> // Required for offsetof
+#include "ReedSolomon.hpp"
 
 static const char* TAG = "TankManager";
 
 TaskHandle_t TankManager::_runningTask;
-// Uncomment this symbol definition if you want to simplify the most frequent updates (at the price of more eeprom wear).
-// #define TANK_EEPROM_CRC_IGNORES_REMAININ_GRAMS
+static ReedSolomon<TankEEpromData_t::DATA_SIZE, TankEEpromData_t::ECC_SIZE> rs;
+
 
 // Helper to convert a device address to a string for logging/UID.
 std::string addressToString(const uint8_t* addr)
@@ -21,70 +22,112 @@ std::string addressToString(const uint8_t* addr)
     return std::string(uid_str);
 }
 
-void TankEEpromData_t::make_crc32(uint32_t& crc, const uint8_t val) {}
-
-uint32_t TankEEpromData_t::getCrc32(TankEEpromData_t& eedata, uint8_t recordIndex)
+void TankEEpromData_t::printTo(Stream& stream, TankEEpromData_t* eeprom)
 {
-    uint8_t* pRcd      = (uint8_t*)&eedata.records[recordIndex & 1];
-    uint32_t resultCrc = TankEEpromData_t::CRC_INIT_VALUE;
+    if (eeprom == nullptr) {
+        ESP_LOGE(TAG, "Null TankEEpromData_t argument given.");
+        return;
+    }
 
-    for (int idx = 0; idx < TankEEpromData_t::CRC_COMPUTATION_SPAN; idx++) {
-#ifdef TANK_EEPROM_CRC_IGNORES_REMAININ_GRAMS
-        if (idx = offsetof(TankEEpromData_t::_RECORD_, remainingGrams)) { // always skip the `remainingGrams` field
-            idx += sizeof(TankEEpromData_t::_RECORD_::remainingGrams);
+    stream.printf("lastBaseMAC48:  %02X%02X%02X%02X%02X%02X\r\n", eeprom->data.history.lastBaseMAC48[0], eeprom->data.history.lastBaseMAC48[1],
+      eeprom->data.history.lastBaseMAC48[2], eeprom->data.history.lastBaseMAC48[3], eeprom->data.history.lastBaseMAC48[4],
+      eeprom->data.history.lastBaseMAC48[5]);
+    stream.flush();
+    stream.printf("lastBusIndex:   %d\r\n", eeprom->data.history.lastBusIndex);
+    stream.flush();
+    stream.printf("nameLength:     %d\r\n", eeprom->data.nameLength);
+    stream.flush();
+    stream.printf("capacity:       %2.4f\r\n", TankManager::q3_13_to_double(eeprom->data.capacity));
+    stream.flush();
+    stream.printf("density:        %2.4f\r\n", TankManager::q2_14_to_double(eeprom->data.density));
+    stream.flush();
+    stream.printf("servoIdlePwm:   %d\r\n", eeprom->data.servoIdlePwm);
+    stream.flush();
+    stream.printf("remainingGrams: %d\r\n", eeprom->data.remainingGrams);
+    stream.flush();
+
+    { // shallow scope for the `nameCpy` array
+        char* pChar             = eeprom->data.name;
+        bool firstNull          = true;
+        size_t consecutiveNulls = 0;
+        stream.print("name: \"");
+        for (int idx = 0; idx < TankEEpromData_t::NAME_FIELD_SIZE; idx++) {
+            if (eeprom->data.name[idx]) {
+                if (consecutiveNulls == 1) {
+                    stream.print("<NULL>");
+                } else if (consecutiveNulls) {
+                    stream.printf("<NULL x%d>", consecutiveNulls);
+                }
+                stream.print(eeprom->data.name[idx]);
+                stream.flush();
+                consecutiveNulls = 0;
+            } else {
+                if (firstNull) {
+                    firstNull = false;
+                    stream.print('\"');
+                } else {
+                    consecutiveNulls++;
+                }
+            }
         }
-#endif
-        bool carries = resultCrc & 0x8000000U ? 1U : 0U;
-        resultCrc <<= 1;
-        if (carries)
-            resultCrc |= 1U;
-        resultCrc ^= pRcd[idx];
-        resultCrc ^= 0xBB40E64D;
     }
-
-    return resultCrc;
+    stream.print("\r\n");
+    stream.flush();
 }
 
-void TankEEpromData_t::finalize(TankEEpromData_t& eedata, uint8_t recordToKeep)
+void TankEEpromData_t::finalize(TankEEpromData_t& eedata)
 {
-    recordToKeep &= 1; // clamp
-    { // Compute and save the crc.
-        uint32_t crc                     = TankEEpromData_t::getCrc32(eedata, recordToKeep);
-        eedata.records[recordToKeep].crc = crc;
-    }
-    { // Copy source to dest, depending on the record to keep.
-        uint8_t* dest = (uint8_t*)&eedata.records[(recordToKeep & 1) ^ 1];
-        uint8_t* src  = (uint8_t*)&eedata.records[(recordToKeep & 1)];
-        memcpy(dest, src, sizeof(TankEEpromData_t));
-    }
+    // Use RS-FEC to encode the data
+    // Message length = 128 (DATA_SIZE + ECC_SIZE)
+    // Data length = 96
+    // Parity length = 32
+    rs.encode((uint8_t*)&eedata.data, eedata.ecc);
 }
 
+void TankEEpromData_t::format(TankEEpromData_t& eedata)
+{
+    memset(&eedata, 0, sizeof(TankEEpromData_t));
+
+    // Initialize with defaults
+    eedata.data.history.lastBusIndex = 0xFF; // No history
+    const char* defaultName          = "New Tank";
+    eedata.data.nameLength           = (uint8_t)strlen(defaultName) + 1; // Include null terminator
+    strncpy(eedata.data.name, defaultName, sizeof(TankEEpromData_t::_EE_RECORD_DATA_::name) - 1);
+
+    eedata.data.capacity       = 0;
+    eedata.data.density        = 0;
+    eedata.data.remainingGrams = 0;
+    eedata.data.servoIdlePwm   = 1500; // Safe default
+
+    // Finalize will handle ECC
+}
 
 bool TankEEpromData_t::sanitize(TankEEpromData_t& eedata)
 {
-    if (memcmp(&eedata.records[0], &eedata.records[1], sizeof(TankEEpromData_t::_RECORD_)) != 0 // records do not match ?
-      || eedata.records[0].nameLength > sizeof(TankEEpromData_t::_RECORD_::name) // string length of record[0] is too long.
-      || eedata.records[1].nameLength > sizeof(TankEEpromData_t::_RECORD_::name) // string length of record[1] is too long.
-      || eedata.records[0].history.lastBusIndex > 6 // record[0] bus index is out of range.
-      || eedata.records[1].history.lastBusIndex > 6 // record[1] bus index is out of range.
-    ) {
+    // 1. Attempt RS-FEC Decode
+    int res = rs.decode((uint8_t*)&eedata.data, eedata.ecc);
 
-        uint32_t crc0 = TankEEpromData_t::getCrc32(eedata, 0);
-        uint32_t crc1 = TankEEpromData_t::getCrc32(eedata, 1);
-        crc0 ^= eedata.records[0].crc;
-        crc1 ^= eedata.records[1].crc;
-        if (crc0 && crc1) { // both invalid !!! Crap !
-            // Just purge them both.
-            memset(&eedata, 0, sizeof(TankEEpromData_t));
-            return false;
-        } else if (crc0) { // record[0] is invalid, overwrite it with records[1]
-            memcpy(&eedata.records[0], &eedata.records[1], sizeof(TankEEpromData_t::_RECORD_));
-        } else if (crc1) { // record[1] is invalid, overwrite it with records[0]
-            memcpy(&eedata.records[1], &eedata.records[0], sizeof(TankEEpromData_t::_RECORD_));
-        } else { // both record are sane, nothing to do here.
-        }
+    // If Decode returns non-zero, it means uncorrectable errors were found.
+    if (res < 0) {
+        return false;
     }
-    return true;
+
+    // 2. Structural/Range Checks on the (potentially corrected) data
+    bool structuralIntegrity = true;
+
+    // Check ranges that would indicate corruption or fresh flash (0xFF)
+    if (eedata.data.nameLength > sizeof(TankEEpromData_t::_EE_RECORD_DATA_::name)) {
+        structuralIntegrity = false;
+    }
+
+    if (eedata.data.history.lastBusIndex > 6 && eedata.data.history.lastBusIndex != 0xFF)
+        structuralIntegrity = false;
+
+    // Check Servo PWM sanity (prevent damage)
+    if (eedata.data.servoIdlePwm < 500 || eedata.data.servoIdlePwm > 2500)
+        structuralIntegrity = false;
+
+    return structuralIntegrity;
 }
 
 
@@ -145,115 +188,59 @@ void TankManager::_tankDetectionTask(void* pvParam)
         return;
     TankManager* pInst = (TankManager*)pvParam;
     SwiMuxPresenceReport_t currReport;
-    uint16_t presenceChanges, prevPresences = 0;
-
 
     // Task loop
     while (1) {
-        if (pInst->_swiMux.isAsleep() && !pInst->_isServoMode) {
-            currReport = pInst->_lastPresenceReport;
+        // We only check if NOT in servo mode.
+        // We try to take the mutex; if the SwiMux is busy, we just skip this cycle.
+        if (!pInst->_isServoMode) {
             if (xSemaphoreTakeRecursive(pInst->_swimuxMutex, MUTEX_ACQUISITION_TIMEOUT) == pdTRUE) {
                 if (pInst->_swiMux.hasEvents(&currReport)) {
-                    currReport ^= pInst->_lastPresenceReport;
+                    uint16_t presenceChanges   = pInst->_lastPresenceReport.presences ^ currReport.presences;
+                    pInst->_lastPresenceReport = currReport;
+
+                    if (presenceChanges != 0) {
+                        // We are already holding the mutex, but refresh() expects to take it.
+                        // Since it's a recursive mutex, this is fine.
+                        pInst->refresh(presenceChanges);
+                    }
                 }
                 xSemaphoreGiveRecursive(pInst->_swimuxMutex);
             }
-            presenceChanges = prevPresences ^ currReport.presences;
-            prevPresences   = currReport.presences;
-            if (presenceChanges)
-                pInst->refresh(presenceChanges);
         }
+        // Poll every second.
         vTaskDelay(pdMS_TO_TICKS(1000));
-    }
-}
-
-
-void TankManager::presenceRefresh()
-{
-    if (_isServoMode) {
-        ESP_LOGW(TAG, "Cannot refresh tank presence while in servo mode.");
-        return;
-    }
-
-    RollCallArray_t presences;
-    bool alreadyKnown[6] = { false, false, false, false, false, false };
-
-    if (xSemaphoreTakeRecursive(_swimuxMutex, MUTEX_ACQUISITION_TIMEOUT) == pdTRUE) {
-        // Get the UIDs of the currently connected tanks.
-        if (_swiMux.rollCall(presences)) {
-            // Part 1: Update existing tanks and remove disconnected ones.
-            // We use an iterator-based loop to safely remove elements from the vector while iterating.
-            for (auto pCurrTank = _knownTanks.begin(); pCurrTank != _knownTanks.end();) {
-                bool isStillPresent = false; // Assume the tank is gone until found.
-
-                // Check if this known tank is in the list of current presences.
-                for (int busIndex = 0; busIndex < 6; busIndex++) {
-                    if (pCurrTank->uid == presences.bus[busIndex]) {
-                        if (alreadyKnown[busIndex]) // presences.bus[busindex] already allocated to a present tank...
-                            continue; // ...thus skipped.
-
-                        // --- MATCH FOUND ---
-                        isStillPresent         = true; // Mark as present.
-                        pCurrTank->busIndex    = busIndex; // Update the bus busIndex.
-                        alreadyKnown[busIndex] = true; // Mark this presence as accounted for.
-                        break; // Move to the next known tank.
-                    }
-                }
-
-                if (!isStillPresent) { // --- TANK NOT FOUND ---
-                    // remove pCurrTank from our known list.
-                    // The erase() method returns an iterator to the next valid element.
-                    ESP_LOGI(TAG, "Tank with UID 0x%016llX is no longer present. Removing.", pCurrTank->uid);
-                    pCurrTank = _knownTanks.erase(pCurrTank);
-                } else {
-                    // This tank is still present, so we advance the iterator to the next one.
-                    ++pCurrTank;
-                }
-            }
-
-            // Part 2: Add any newly discovered tanks to the list.
-            for (int busIndex = 0; busIndex < 6; busIndex++) {
-                // A valid UID that was not accounted for above must be a new tank.
-                // We check for UID != 0 as a safeguard against empty slots.
-                if (!alreadyKnown[busIndex] && presences.bus[busIndex] != 0) {
-                    ESP_LOGI(TAG, "New tank with UID 0x%016llX detected on bus %d.", presences.bus[busIndex], busIndex);
-
-                    TankInfo newTank;
-                    newTank.uid        = presences.bus[busIndex];
-                    newTank.busIndex   = busIndex;
-                    newTank.isFullInfo = false; // Mark that we only have partial info.
-                    _knownTanks.push_back(newTank);
-                }
-            }
-        } else {
-            ESP_LOGE(TAG, "TankManager::presenceRefresh roll call failed.");
-        }
-        xSemaphoreGiveRecursive(_swimuxMutex);
-    } else {
-        ESP_LOGE(TAG, "Failed to acquire SwiMux mutex to update global tank list!");
     }
 }
 
 bool TankInfo::fillFromEeprom(TankEEpromData_t& eeprom)
 {
-    // Sanitize eepromData beforehand
+    // Warning: fillFromEeprom assumes the data is SANITIZED.
+    // It will blindly read whatever fields are in there.
+    // TankManager::refresh guarantees this by calling format() if sanitize() fails.
 
-    if (!TankEEpromData_t::sanitize(eeprom))
-        return false;
-
-
-    // tank.uid and tank.busIndex are supposed to be already filled in (by TankManager::presenceRefresh() )
     name.clear();
-    name.assign((char*)&eeprom.records[0].name[0], (size_t)eeprom.records[0].nameLength);
-    capacityLiters = TankManager::q3_13_to_double(eeprom.records[0].capacity);
-    kibbleDensity  = TankManager::q2_14_to_double(eeprom.records[0].density);
+    // Safety clamp on name length
+    uint8_t safeLen = std::min(eeprom.data.nameLength, (uint8_t)sizeof(TankEEpromData_t::_EE_RECORD_DATA_::name));
+    if (safeLen > 0) {
+        // Ensure null termination for string construction
+        char tempName[sizeof(TankEEpromData_t::_EE_RECORD_DATA_::name) + 1];
+        memcpy(tempName, eeprom.data.name, safeLen);
+        tempName[safeLen] = '\0';
+        name              = std::string(tempName);
+    } else {
+        name = "";
+    }
+
+    capacityLiters = TankManager::q3_13_to_double(eeprom.data.capacity);
+    kibbleDensity  = TankManager::q2_14_to_double(eeprom.data.density);
     w_capacity_kg  = (kibbleDensity / capacityLiters);
-    if (eeprom.records[0].remainingGrams > 1.0) {
-        remaining_weight_kg = w_capacity_kg / (((double)(int)eeprom.records[0].remainingGrams) * 1E-3);
+    if (eeprom.data.remainingGrams > 1.0) {
+        remaining_weight_kg = w_capacity_kg / (((double)(int)eeprom.data.remainingGrams) * 1E-3);
     } else {
         remaining_weight_kg = 0;
     }
-    servoIdlePwm = eeprom.records[0].servoIdlePwm;
+    servoIdlePwm = eeprom.data.servoIdlePwm;
     isFullInfo   = true;
     return true;
 }
@@ -263,40 +250,40 @@ TankInfo::TankInfoDiscrepancies_e TankInfo::toTankData(TankEEpromData_t& eeprom)
 {
     uint32_t result = TID_NONE;
     // name
-    if (name.compare(0, sizeof(TankEEpromData_t::_RECORD_::name), (char*)&eeprom.records[0].name[0]) != 0) {
+    if (name.compare(0, sizeof(TankEEpromData_t::_EE_RECORD_DATA_::name), (char*)&eeprom.data.name[0]) != 0) {
         result |= TID_NAME_CHANGED;
         // Copy the length-capped name string.
-        eeprom.records[0].nameLength = std::min(name.length(), (size_t)sizeof(TankEEpromData_t::_RECORD_::name));
-        strncpy((char*)&eeprom.records[0].name[0], name.c_str(), (size_t)eeprom.records[0].nameLength - 1);
+        eeprom.data.nameLength = std::min(name.length(), (size_t)sizeof(TankEEpromData_t::_EE_RECORD_DATA_::name));
+        strncpy((char*)&eeprom.data.name[0], name.c_str(), (size_t)eeprom.data.nameLength - 1);
     }
     // bus index
-    if (busIndex != eeprom.records[0].history.lastBusIndex) {
+    if (busIndex != eeprom.data.history.lastBusIndex) {
         result |= TID_BUSINDEX_CHANGED;
-        eeprom.records[0].history.lastBusIndex = busIndex;
+        eeprom.data.history.lastBusIndex = busIndex;
     }
     // MAC48 of last connected base .
-    if (0 != memcmp(lastBaseMAC48, eeprom.records[0].history.lastBaseMAC48, 6)) {
+    if (0 != memcmp(lastBaseMAC48, eeprom.data.history.lastBaseMAC48, 6)) {
         result |= TID_MAC_CHANGED;
-        memcpy(eeprom.records[0].history.lastBaseMAC48, lastBaseMAC48, 6);
+        memcpy(eeprom.data.history.lastBaseMAC48, lastBaseMAC48, 6);
     }
     // Specs
     uint16_t qCap  = TankManager::double_to_q3_13(capacityLiters);
     uint16_t qDens = TankManager::double_to_q2_14(kibbleDensity);
-    if (eeprom.records[0].servoIdlePwm != servoIdlePwm || eeprom.records[0].capacity != qCap || eeprom.records[0].density != qDens) {
+    if (eeprom.data.servoIdlePwm != servoIdlePwm || eeprom.data.capacity != qCap || eeprom.data.density != qDens) {
         result |= TID_SPECS_CHANGED;
-        eeprom.records[0].servoIdlePwm = servoIdlePwm;
-        eeprom.records[0].capacity     = qCap;
-        eeprom.records[0].density      = qDens;
+        eeprom.data.servoIdlePwm = servoIdlePwm;
+        eeprom.data.capacity     = qCap;
+        eeprom.data.density      = qDens;
     }
     // Remaining kibble
     uint32_t tankRemGrams = (uint32_t)std::abs(remaining_weight_kg * 1E-3);
-    if (eeprom.records[0].remainingGrams != tankRemGrams) {
+    if (eeprom.data.remainingGrams != tankRemGrams) {
         result |= TID_REMAINING_CHANGED;
-        eeprom.records[0].remainingGrams = tankRemGrams;
+        eeprom.data.remainingGrams = tankRemGrams;
     }
 
-    // Compute eeprom.records[0]'s crc and copy eeprom.records[0] over to eeprom.records[1].
-    TankEEpromData_t::finalize(eeprom, 0);
+    // Compute eeprom ECC
+    TankEEpromData_t::finalize(eeprom);
 
     return (TankInfoDiscrepancies_e)result;
 }
@@ -306,22 +293,9 @@ void TankManager::refresh(uint16_t refreshMap)
 {
     // Based on the code, we assume there are 6 buses.
     constexpr uint16_t allBusesMask = (1 << NUMBER_OF_BUSES) - 1;
-
     refreshMap &= allBusesMask;
 
-    // If all buses are to be refreshed, use the optimized fullRefresh method.
-    if (refreshMap == allBusesMask) {
-        fullRefresh();
-        return;
-    }
-
-    // If no specific buses are requested for refresh, do nothing.
-    if (refreshMap == 0) {
-        return;
-    }
-
-    if (_isServoMode) {
-        ESP_LOGW(TAG, "Cannot refresh tank presence while in servo mode.");
+    if (refreshMap == 0 || _isServoMode) {
         return;
     }
 
@@ -330,73 +304,115 @@ void TankManager::refresh(uint16_t refreshMap)
         return;
     }
 
-    // Iterate through each bus index to see if it needs refreshing.
-    for (uint8_t busIndex = 0; busIndex < NUMBER_OF_BUSES; ++busIndex) {
-        // Check if the current bus is in the refresh map.
-        if (!((refreshMap >> busIndex) & 1)) {
+    // PHASE 1: Hardware Scan
+    uint64_t foundUids[6] = { 0 };
+    bool scannedBus[6]    = { false };
+
+    if (refreshMap == allBusesMask) {
+        RollCallArray_t presences;
+        if (_swiMux.rollCall(presences) == SMREZ_OK) {
+            for (int i = 0; i < 6; i++) {
+                // Important: Map UINT64_MAX (Driver's "No Device") and 0 to Internal "Empty" (0)
+                if (presences.bus[i] == UINT64_MAX || presences.bus[i] == 0) {
+                    foundUids[i] = 0;
+                } else {
+                    foundUids[i] = presences.bus[i];
+                }
+                scannedBus[i] = true;
+            }
+        }
+    } else {
+        for (int i = 0; i < 6; i++) {
+            if ((refreshMap >> i) & 1) {
+                scannedBus[i]   = true;
+                uint64_t uidVal = 0;
+                if (_swiMux.getUid(i, uidVal) == SMREZ_OK) {
+                    // Important: Map UINT64_MAX (Driver's "No Device") and 0 to Internal "Empty" (0)
+                    if (uidVal == UINT64_MAX || uidVal == 0) {
+                        foundUids[i] = 0;
+                    } else {
+                        foundUids[i] = uidVal;
+                    }
+                }
+            }
+        }
+    }
+
+    // PHASE 2: Reconcile Detached Tanks
+    for (auto& tank : _knownTanks) {
+        if (tank.busIndex >= 0 && tank.busIndex < 6 && scannedBus[tank.busIndex]) {
+            if (tank.uid != foundUids[tank.busIndex]) {
+                ESP_LOGI(TAG, "Tank 0x%016llX detached from bus %d", tank.uid, tank.busIndex);
+                tank.busIndex = -1; // Mark as detached
+            }
+        }
+    }
+
+    // PHASE 3: Attach / Create Tanks
+    for (int i = 0; i < 6; i++) {
+        if (!scannedBus[i] || foundUids[i] == 0)
             continue;
+
+        uint64_t uid = foundUids[i];
+
+        auto it = std::find_if(_knownTanks.begin(), _knownTanks.end(), [uid](const TankInfo& t) { return t.uid == uid; });
+
+        TankInfo* targetTank = nullptr;
+
+        if (it != _knownTanks.end()) {
+            // Found existing tank.
+            if (it->busIndex != i) {
+                ESP_LOGI(TAG, "Tank 0x%016llX moved to bus %d", uid, i);
+                it->busIndex = i;
+            }
+            targetTank = &(*it);
+        } else {
+            // New Tank!
+            ESP_LOGI(TAG, "New tank 0x%016llX discovered on bus %d", uid, i);
+            _knownTanks.emplace_back();
+            targetTank             = &_knownTanks.back();
+            targetTank->uid        = uid;
+            targetTank->busIndex   = i;
+            targetTank->isFullInfo = false;
         }
 
-        uint64_t uidOnBus = 0;
-        bool isPresent    = (_swiMux.getUid(busIndex, uidOnBus) == SMREZ_OK) && (uidOnBus != 0);
-
-        // Find if we have a tank currently registered at this bus index in our known list.
-        TankInfo* knownTankOnBus = getKnownTankOfBus(busIndex);
-
-        if (isPresent) { // A device is physically connected to this bus.
-            // See if we know about this specific device (by UID), regardless of where it is.
-            TankInfo* knownTankWithUid = getKnownTankOfUis(uidOnBus);
-
-            // Situation: The bus was supposed to have tank A, but we now detect tank B.
-            // Tank A must have been removed.
-            if (knownTankOnBus && knownTankOnBus->uid != uidOnBus) {
-                ESP_LOGI(TAG, "Tank on bus %d changed. Removing old tank with UID 0x%016llX.", busIndex, knownTankOnBus->uid);
-                removeKnownTank(knownTankOnBus);
-                knownTankOnBus = nullptr; // Pointer is now invalid.
-            }
-
-            TankInfo* tankToUpdate = knownTankWithUid;
-
-            if (!tankToUpdate) {
-                // This is a completely new tank. Add it to our list.
-                ESP_LOGI(TAG, "New tank with UID 0x%016llX detected on bus %d.", uidOnBus, busIndex);
-                _knownTanks.emplace_back();
-                tankToUpdate      = &_knownTanks.back();
-                tankToUpdate->uid = uidOnBus;
-            }
-
-            // At this point, tankToUpdate points to the correct tank object in our list.
-            // Update its bus index and refresh its full info from its EEPROM.
-            tankToUpdate->busIndex = busIndex;
-
+        // If we don't have full info, try to read it now.
+        if (targetTank && !targetTank->isFullInfo) {
             TankEEpromData_t data;
             uint8_t* eeData = reinterpret_cast<uint8_t*>(&data);
-            int retries     = 3;
-            bool readOk     = false;
-            do {
-                if (_swiMux.read(busIndex, eeData, 0, sizeof(TankEEpromData_t)) == SMREZ_OK) {
-                    tankToUpdate->fillFromEeprom(data);
-                    readOk = true;
-                    break;
-                }
-            } while (--retries);
 
-            if (!readOk) {
-                ESP_LOGE(TAG, "Could not read EEPROM from tank #%d, UID 0x%016llX", busIndex, uidOnBus);
-                // If this was a newly added tank, it's useless if we can't read it, so remove it.
-                if (!knownTankWithUid) {
-                    removeKnownTank(tankToUpdate);
-                }
-            }
+            if (_swiMux.read(i, eeData, 0, sizeof(TankEEpromData_t)) == SMREZ_OK) {
 
-        } else {
-            // No device is physically connected to this bus.
-            // If we thought there was one, it has been disconnected.
-            if (knownTankOnBus) {
-                ESP_LOGI(TAG, "Tank with UID 0x%016llX on bus %d is no longer present. Removing.", knownTankOnBus->uid, busIndex);
-                removeKnownTank(knownTankOnBus);
+                // --- CRITICAL SECTION: VALIDATION & FORMATTING ---
+                if (!TankEEpromData_t::sanitize(data)) {
+                    ESP_LOGW(TAG, "Corrupt or uninitialized EEPROM detected on tank 0x%016llX. Formatting...", uid);
+
+                    // Format memory structure to default "New Tank"
+                    TankEEpromData_t::format(data);
+                    TankEEpromData_t::finalize(data);
+
+                    // Write formatted data back to the physical device
+                    if (_swiMux.write(i, eeData, 0, sizeof(TankEEpromData_t)) == SMREZ_OK) {
+                        ESP_LOGI(TAG, "Tank 0x%016llX successfully formatted.", uid);
+                    } else {
+                        ESP_LOGE(TAG, "Failed to write formatted data to tank 0x%016llX!", uid);
+                        // We still proceed to fillFromEeprom so the webserver sees it as New,
+                        // even if the write failed (it might succeed next time).
+                    }
+                }
+                // --------------------------------------------------
+
+                targetTank->fillFromEeprom(data);
             }
         }
+    }
+
+    // PHASE 4: Garbage Collection
+    auto newEnd = std::remove_if(_knownTanks.begin(), _knownTanks.end(), [](const TankInfo& t) { return t.busIndex == -1; });
+
+    if (newEnd != _knownTanks.end()) {
+        ESP_LOGI(TAG, "Garbage collecting %d disconnected tanks.", std::distance(newEnd, _knownTanks.end()));
+        _knownTanks.erase(newEnd, _knownTanks.end());
     }
 
     xSemaphoreGiveRecursive(_swimuxMutex);
@@ -404,39 +420,13 @@ void TankManager::refresh(uint16_t refreshMap)
 
 
 
-void TankManager::fullRefresh()
-{
-    if (_isServoMode)
-        return;
-    if (xSemaphoreTakeRecursive(_swimuxMutex, MUTEX_ACQUISITION_TIMEOUT) == pdTRUE) {
-        presenceRefresh();
-        TankEEpromData_t data;
-        for (auto& tank : _knownTanks) {
-            int retries     = 3;
-            uint8_t* eeData = (uint8_t*)&data;
-            do {
-                if (SMREZ_OK == _swiMux.read(tank.busIndex, eeData, 0, sizeof(TankEEpromData_t))) {
-                    tank.fillFromEeprom(data);
-                    break;
-                }
-            } while (--retries);
-            if (retries <= 0) {
-                ESP_LOGE(TAG, "Could not read data from tank #%d, UID 0x%016llX", tank.busIndex, tank.uid);
-            }
-        }
-        xSemaphoreGiveRecursive(_swimuxMutex);
-    } else {
-        ESP_LOGE(TAG, "Failed to acquire SwiMux mutex for fullRefresh!");
-    }
-}
-
 bool TankManager::updateEeprom(TankEEpromData_t& data, TankInfo::TankInfoDiscrepancies_e updatesNeeded, int8_t forcedBusIndex)
 {
     if (_isServoMode)
         return false;
     // Determine the bus index to use. If forcedBusIndex is provided (>=0), use it.
     // Otherwise, use the last known bus index from the data structure.
-    uint8_t busIndex = (forcedBusIndex >= 0) ? forcedBusIndex : data.records[0].history.lastBusIndex;
+    uint8_t busIndex = (forcedBusIndex >= 0) ? forcedBusIndex : data.data.history.lastBusIndex;
     busIndex %= 6;
 
     // If there's nothing to update, we can return immediately.
@@ -491,6 +481,18 @@ void TankManager::removeKnownTank(TankInfo* tankToRemove)
 {
     if (tankToRemove == nullptr)
         return;
+
+    // Check validity of pointer before removal attempt (safety measure)
+    bool isValid = false;
+    for (const auto& t : _knownTanks) {
+        if (&t == tankToRemove) {
+            isValid = true;
+            break;
+        }
+    }
+    if (!isValid)
+        return;
+
     // 2. Use std::remove_if to move the target element to the end of the vector.
     // The lambda function identifies the element by comparing its memory address.
     auto newEnd = std::remove_if(_knownTanks.begin(), _knownTanks.end(), [&](const TankInfo& tank) { return &tank == tankToRemove; });
@@ -510,16 +512,18 @@ int8_t TankManager::getBusOfTank(const uint64_t tankUid)
         return -1;
     }
 
-    presenceRefresh();
+    refresh(); // Refresh list to get current state
+
+    int8_t foundIndex = -1;
     for (const auto& tank : _knownTanks) {
         if (tank.uid == tankUid) {
-            xSemaphoreGiveRecursive(_swimuxMutex);
-            return tank.busIndex;
+            foundIndex = tank.busIndex;
+            break;
         }
     }
 
     xSemaphoreGiveRecursive(_swimuxMutex);
-    return -1;
+    return foundIndex;
 }
 
 // Handles updating the tank's configuration in its EEPROM.
@@ -645,19 +649,6 @@ bool TankManager::updateRemaingKibble(const uint64_t uid, uint16_t newRemainingG
         ESP_LOGW(TAG, "updateRemaingKibble: Tank 0x%016llX found on bus but not in cache.", uid);
     }
 
-#ifdef TANK_EEPROM_CRC_IGNORES_REMAININ_GRAMS
-    // --- Fast path: direct write, CRC not impacted ---
-    const uint8_t offset = offsetof(TankEEpromData_t::_RECORD_, remainingGrams);
-    uint8_t* pData       = reinterpret_cast<uint8_t*>(&newRemainingGrams);
-
-    if (SMREZ_OK == _swiMux.write(busIndex, pData, offset, sizeof(TankEEpromData_t::_RECORD_::remainingGrams))
-      && SMREZ_OK
-        == _swiMux.write(busIndex, pData, offset + sizeof(TankEEpromData_t::_RECORD_), sizeof(TankEEpromData_t::_RECORD_::remainingGrams))) {
-        ESP_LOGI(TAG, "Updated remaining kibble (fast path) for tank 0x%016llX to %d g.", uid, newRemainingGrams);
-        xSemaphoreGiveRecursive(_swimuxMutex);
-        return true;
-    }
-#else
     // --- Safe path: full read/modify/finalize/write ---
     TankEEpromData_t eedata;
     uint8_t* eeBytes = reinterpret_cast<uint8_t*>(&eedata);
@@ -668,12 +659,11 @@ bool TankManager::updateRemaingKibble(const uint64_t uid, uint16_t newRemainingG
         return false;
     }
 
-    // Update both records
-    eedata.records[0].remainingGrams = newRemainingGrams;
-    eedata.records[1].remainingGrams = newRemainingGrams;
+    // Update record
+    eedata.data.remainingGrams = newRemainingGrams;
 
-    // Recompute CRCs + copy active record
-    TankEEpromData_t::finalize(eedata, 0);
+    // Encode ECC
+    TankEEpromData_t::finalize(eedata);
 
     if (SMREZ_OK != _swiMux.write(busIndex, eeBytes, 0, sizeof(TankEEpromData_t))) {
         ESP_LOGE(TAG, "updateRemaingKibble: Failed to write EEPROM of tank 0x%016llX", uid);
@@ -684,11 +674,6 @@ bool TankManager::updateRemaingKibble(const uint64_t uid, uint16_t newRemainingG
     ESP_LOGI(TAG, "Updated remaining kibble (safe path) for tank 0x%016llX to %d g.", uid, newRemainingGrams);
     xSemaphoreGiveRecursive(_swimuxMutex);
     return true;
-#endif
-
-    ESP_LOGE(TAG, "Failed to update remaining kibble for tank 0x%016llX", uid);
-    xSemaphoreGiveRecursive(_swimuxMutex);
-    return false;
 }
 
 // --- Servo Control Implementation ---
@@ -817,7 +802,7 @@ bool TankManager::testSwiBusUID(uint8_t index, uint64_t& result)
         xSemaphoreGiveRecursive(_swimuxMutex);
         if (res == SMREZ_OK)
             return true;
-        ESP_LOGD(TAG, "UID acquisition failed (%s)", SwiMuxSerial_t::getResultValueName(res));
+        ESP_LOGD(TAG, "UID acquisition failed (%s)", SwiMuxSerial_t::getSwiMuxErrorString(res));
     } else {
         ESP_LOGE(TAG, "Error: Could not acquire SwiMux mutex for test.");
     }
@@ -846,6 +831,51 @@ SwiMuxSerialResult_e TankManager::testSwiRead(uint8_t busIndex, uint16_t address
 SwiMuxSerialResult_e TankManager::testSwiWrite(uint8_t busIndex, uint16_t address, const uint8_t* dataIn, uint16_t length)
 {
     return _swiMux.write(busIndex, dataIn, address & 0xFF, length);
+}
+
+/**
+ * @brief Test the formatting of a memory on a designated bus. 
+ * @param index Index of the bus to format the memory on.
+ * @return A value of the SwiMuxSerialResult_e enum.
+ */
+SwiMuxSerialResult_e TankManager::testFormat(uint8_t index)
+{
+    if (index < 0 || index >= NUMBER_OF_BUSES) {
+        ESP_LOGE(TAG, "TankManager::testFormat called with invalid argument value (%d)", index);
+        return SMREZ_BUS_INDEX_OUT_OF_RANGE;
+    }
+    TankEEpromData_t data;
+    TankEEpromData_t::format(data);
+    TankEEpromData_t::finalize(data);
+    SwiMuxSerialResult_e res = SMREZ_MutexAcquisition;
+    if (xSemaphoreTakeRecursive(_swimuxMutex, MUTEX_ACQUISITION_TIMEOUT) == pdTRUE) {
+        res = _swiMux.write(index, (const uint8_t*)&data, 0, sizeof(TankEEpromData_t));
+        xSemaphoreGiveRecursive(_swimuxMutex);
+    }
+
+    return res;
+}
+
+SwiMuxSerialResult_e TankManager::testSwiMuxECC(uint8_t index, int& correctedCount)
+{
+    if (index < 0 || index >= NUMBER_OF_BUSES) {
+        ESP_LOGE(TAG, "TankManager::testSwiMuxECC called with invalid argument value (%d)", index);
+        return SMREZ_BUS_INDEX_OUT_OF_RANGE;
+    }
+    correctedCount = 0;
+    TankEEpromData_t eeprom;
+    SwiMuxSerialResult_e result = SMREZ_MutexAcquisition;
+    if (xSemaphoreTakeRecursive(_swimuxMutex, MUTEX_ACQUISITION_TIMEOUT) == pdTRUE) {
+        result = _swiMux.read(index, (uint8_t*)&eeprom, 0, sizeof(TankEEpromData_t));
+        if (result != SMREZ_OK) {
+            return result;
+        }
+        // Now to do the ecc
+        correctedCount = rs.decode((uint8_t*)&eeprom.data, eeprom.ecc);
+
+        xSemaphoreGiveRecursive(_swimuxMutex);
+    }
+    return result;
 }
 
 #endif // KIBBLET5_DEBUG_ENABLED

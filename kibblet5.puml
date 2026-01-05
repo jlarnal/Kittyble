@@ -1,0 +1,1301 @@
+@startuml
+
+
+
+
+
+/' Objects '/
+
+class Battery {
+	+Battery(uint16_t minVoltage, uint16_t maxVoltage, uint8_t sensePin, uint8_t adcBits, uint16_t averaging_samples)
+	+~Battery()
+	-_dividerRatio : float
+	-_mapFunc : mapFn_t
+	-_averaging_samples : uint16_t
+	-_maxVoltage : uint16_t
+	-_minVoltage : uint16_t
+	-_refVoltage : uint16_t
+	-_windowIndex : uint16_t
+	+voltage() : uint16_t
+	-voltageFast(uint16_t samples) : uint16_t
+	-_window : uint16_t*
+	-_accumulator : uint64_t
+	-_activationMode : uint8_t
+	-_activationPin : uint8_t
+	-_adcBits : uint8_t
+	-_sensePin : uint8_t
+	+level(uint16_t voltage) : uint8_t
+	+begin(uint16_t refVoltage, float dividerRatio, mapFn_t) : void
+	+getAverages(uint16_t* milliVoltsOut, uint8_t* levelOut) : void
+	+onDemand(uint8_t activationPin, uint8_t activationMode) : void
+	+refreshAverage() : void
+}
+
+
+class ConfigManager {
+	+ConfigManager(const char* nvs_namespace)
+	-_openNVS() : bool
+	+begin() : bool
+	+factoryReset() : bool
+	+loadHopperCalibration(uint16_t& closed_pwm, uint16_t& open_pwm) : bool
+	+loadScaleCalibration(float& factor, long& offset) : bool
+	+loadWiFiCredentials(std::string& ssid, std::string& password) : bool
+	+saveHopperCalibration(uint16_t closed_pwm, uint16_t open_pwm) : bool
+	+saveRecipes(const std::vector<Recipe>& recipes) : bool
+	+saveScaleCalibration(float factor, long offset) : bool
+	+saveTimezone(const std::string& tz) : bool
+	+saveWiFiCredentials(const std::string& ssid, const std::string& password) : bool
+	-_namespace : const char*
+	-_nvs_handle : nvs_handle_t
+	+loadTimezone() : std::string
+	+loadRecipes() : std::vector<Recipe>
+	-_closeNVS() : void
+}
+
+
+class DeviceState::Settings_t {
+	+begin() : bool
+	-_dispensingWeightChangeThreshold : float
+	+getDispensingWeightChangeThreshold() : float {query}
+	-_dispensingNoWeightChangeTimeout_ms : uint32_t
+	+getDispensingNoWeightChangeTimeout_ms() : uint32_t {query}
+	-_scaleSamplesCount : uint8_t
+	+getScaleSamplesCount() : uint8_t {query}
+	+resetToDefaults(bool save) : void
+	+setDispensingNoWeightChangeTimeout_ms(uint32_t value) : void
+	+setDispensingWeightChangeThreshold(float newValue) : void
+	+setScaleSamplesCount(uint8_t value) : void
+}
+
+
+class EPaperDisplay {
+	+EPaperDisplay(DeviceState& deviceState, SemaphoreHandle_t& mutex)
+	-_deviceState : DeviceState&
+	-_mutex : SemaphoreHandle_t&
+	-_display : Ssd1680_Driver*
+	-_displayTaskHandle : TaskHandle_t
+	+begin() : bool
+	-_clearDisplay() : void
+	-{static} _displayTask(void* pvParameters) : void
+	-_updateDisplay() : void
+	+forceUpdate() : void
+	+showBootScreen() : void
+	+showError(const char* title, const char* message) : void
+	+showStatus(const char* title, const char* message) : void
+	+showWifiSetup(const char* ap_ssid) : void
+	+startTask() : void
+}
+
+
+class GaloisField {
+	+GaloisField()
+	+{static} getInstance() : GaloisField&
+	+{static} EXP_TABLE : static const uint8_t[]
+	+{static} LOG_TABLE : static const uint8_t[]
+	+{static} FIELD_SIZE : static constexpr int
+	+add(uint8_t a, uint8_t b) : uint8_t {query}
+	+div(uint8_t a, uint8_t b) : uint8_t {query}
+	+inverse(uint8_t a) : uint8_t {query}
+	+mul(uint8_t a, uint8_t b) : uint8_t {query}
+	+pow(uint8_t a, int n) : uint8_t {query}
+	+sub(uint8_t a, uint8_t b) : uint8_t {query}
+}
+
+
+class HX711 {
+	+HX711()
+	+~HX711()
+	+is_ready() : bool
+	+wait_ready_retry(int retries, unsigned long delay_ms) : bool
+	+wait_ready_timeout(unsigned long timeout, unsigned long delay_ms) : bool
+	+get_value(uint8_t times) : double
+	-SCALE : float
+	+get_scale() : float
+	+get_units(uint8_t times) : float
+	-OFFSET : long
+	+get_offset() : long
+	+read() : long
+	+read_average(uint8_t times) : long
+	-DOUT : uint8_t
+	-GAIN : uint8_t
+	-PD_SCK : uint8_t
+	+begin(uint8_t dout, uint8_t pd_sck, uint8_t gain) : void
+	+power_down() : void
+	+power_up() : void
+	+set_gain(uint8_t gain) : void
+	+set_offset(long offset) : void
+	+set_scale(float scale) : void
+	+tare(uint8_t times) : void
+	+wait_ready(unsigned long delay_ms) : void
+}
+
+
+class HX711Scale {
+	+HX711Scale(DeviceState& deviceState, SemaphoreHandle_t& mutex, ConfigManager& configManager)
+	-_configManager : ConfigManager&
+	-_deviceState : DeviceState&
+	-_scale : HX711
+	-_scaleMutex : SemaphoreHandle_t
+	-_mutex : SemaphoreHandle_t&
+	+begin(uint8_t dataPin, uint8_t clockPin) : bool
+	-_calibrationFactor : float
+	+calibrateWithKnownWeight(float knownWeight) : float
+	+getCalibrationFactor() : float
+	+getWeight() : float
+	-_zeroOffset : long
+	+getRawReading() : long
+	+getZeroOffset() : long
+	-{static} _scaleTask(void* pvParameters) : void
+	+saveCalibration() : void
+	+setCalibrationFactor(float factor) : void
+	+startTask() : void
+	+tare() : void
+}
+
+
+class PCA9685 {
+	+PCA9685()
+	+PCA9685(const uint8_t addr)
+	+PCA9685(const uint8_t addr, TwoWire& i2c)
+	#_i2c : TwoWire*
+	+setFull(int8_t num, bool fullOn) : int
+	+setPWM(int8_t num, uint16_t on, uint16_t off) : int
+	+writeMicroseconds(uint8_t num, uint16_t Microseconds) : int
+	#_oscillator_freq : uint32_t
+	+getOscillatorFrequency() : uint32_t
+	#_i2caddr : uint8_t
+	+getPWM(uint8_t num) : uint8_t
+	#read8(uint8_t addr) : uint8_t
+	+readPrescale() : uint8_t
+	+begin(uint8_t prescale) : void
+	+reset() : void
+	+setExtClk(uint8_t prescale) : void
+	+setOscillatorFrequency(uint32_t freq) : void
+	+setOutputMode(bool totempole) : void
+	+setPWMFreq(float freq) : void
+	+sleep() : void
+	+wakeup() : void
+	#write8(uint8_t addr, uint8_t d) : void
+}
+
+
+class RecipeProcessor {
+	+RecipeProcessor(DeviceState& deviceState, SemaphoreHandle_t& mutex, ConfigManager& configManager, TankManager& tankManager, HX711Scale& scale)
+	-_configManager : ConfigManager&
+	-_deviceState : DeviceState&
+	-_scale : HX711Scale&
+	+getScale() : HX711Scale&
+	+getRecipeById(int recipeId) : Recipe
+	-_mutex : SemaphoreHandle_t&
+	-_tankManager : TankManager&
+	-_dispenseIngredient(const uint64_t tankUid, float targetWeight) : bool
+	+addRecipe(const Recipe& recipe) : bool
+	+deleteRecipe(int recipeId) : bool
+	+executeImmediateFeed(const uint64_t tankUid, float targetWeight) : bool
+	+executeRecipeFeed(int recipeId, int servings) : bool
+	+updateRecipe(const Recipe& recipe) : bool
+	-_recipes : std::vector<Recipe>
+	+getRecipes() : std::vector<Recipe>
+	-_loadRecipesFromNVS() : void
+	-_saveRecipesToNVS() : void
+	+begin() : void
+	+stopAllFeeding() : void
+}
+
+
+class ReedSolomon <template<size_t DataLen, size_t EccLen>> {
+	+ReedSolomon()
+	-gf : const GaloisField&
+	+decode(uint8_t* data, uint8_t* ecc) : int
+	+{static} BlockLen : static constexpr size_t
+	-generatorPoly : uint8_t[]
+	+encode(const uint8_t* data, uint8_t* ecc) : void
+	-initGeneratorPoly() : void
+}
+
+
+class RollingLog {
+	+RollingLog(FS& fs, const char* path, size_t maxLogSize)
+	+~RollingLog()
+	-_fs : FS&
+	-_file : File
+	-_path : String
+	+readString() : String
+	-_initialized : bool
+	+begin(bool formatIfCorrupt) : bool
+	-findMarkers() : bool
+	-initializeLogFile() : bool
+	-_buffer : char*
+	+available() : int
+	+peek() : int
+	+read() : int
+	-_endPos : size_t
+	-_maxSize : size_t
+	-_readCursor : size_t
+	-_startPos : size_t
+	-dataSize() : size_t {query}
+	+printf(const char* format) : size_t
+	+size() : size_t
+	+vprintf(const char* format, va_list args) : size_t
+	+write(uint8_t data) : size_t
+	+write(const uint8_t* buffer, size_t size) : size_t
+	-{static} BUFFER_SIZE : static const size_t
+	-{static} MARKER_LEN : static const size_t
+	-{static} MARKER_ETX : static const uint8_t
+	-{static} MARKER_STX : static const uint8_t
+	+flush() : void
+	+rewind() : void
+	-writeMarker(size_t pos, uint8_t marker) : void
+}
+
+
+class SafetySystem {
+	+SafetySystem(DeviceState& deviceState, SemaphoreHandle_t& mutex, TankManager& tankManager)
+	-_deviceState : DeviceState&
+	-_mutex : SemaphoreHandle_t&
+	-_tankManager : TankManager&
+	-{static} _safetyTask(void* pvParameters) : void
+	+startTask() : void
+}
+
+
+class SerialDebugger_t {
+	+SerialDebugger_t(Stream& output)
+	-_out : Stream&
+	+readKey(bool waitForReception) : int
+	+print(const char* title, void* buffer, size_t length, int columns, uint8_t radix, bool linesHeaders, bool addPrefixes, const char* sepString) : void
+}
+
+
+class Ssd1680_Driver {
+	+Ssd1680_Driver(int width, int height, int16_t SID, int16_t SCLK, int16_t DC, int16_t RST, int16_t CS, int16_t SRCS, int16_t MISO, int16_t BUSY)
+	+Ssd1680_Driver(int width, int height, int16_t DC, int16_t RST, int16_t CS, int16_t SRCS, int16_t BUSY, SPIClass* spi)
+	+powerUp(), update () : void
+}
+
+
+class StaticBuffer_t <template<size_t BUFFER_CAPACITY>> {
+	+StaticBuffer_t()
+	+operatoruint8_t*()
+	+append(const uint8_t value) : bool
+	-_count : size_t
+	+count() : size_t
+	+operator[](int index) : uint8_t&
+	-_pool : uint8_t[]
+	+clear() : void
+}
+
+
+class SwiMuxComms_t {
+	+SwiMuxComms_t()
+	-_buffer : StaticBuffer_t<SWIMUX_BUFF_SIZE>
+	-_lastAckError : SwiMuxError_e
+	-_framedOrEscaped : bool
+	-_resetOnNextDecode : bool
+	+encode(const uint8_t* input, size_t len, SwiMuxDelegateFunc_t<void ( uint8_t )> resultWriter) : bool
+	+waitForAckTo(const SwiMuxOpcodes_e opCode, SwiMuxDelegateFunc_t<unsigned long ( )> getTime_ms, SwiMuxDelegateFunc_t<int ( void )> readFunc, SwiMuxDelegateFunc_t<void ( unsigned long )> delay_ms_func, uint32_t timeout_ms) : bool
+	+decode(const uint8_t byte, uint8_t*& payload, size_t& payloadLength) : int
+	+getLastAckError() : int
+	-{static} SWIMUX_BUFF_SIZE : static constexpr size_t
+	-{static} END : static constexpr uint8_t
+	-{static} ESC : static constexpr uint8_t
+	-{static} ESC_END : static constexpr uint8_t
+	-{static} ESC_ESC : static constexpr uint8_t
+	-_calculated_crc : uint32_t
+	-_crc_consumed : uint32_t
+	-_block : uint8_t
+	-_code : uint8_t
+	+reset() : void
+	+resync(SwiMuxDelegateFunc_t<void ( uint8_t )> writer, SwiMuxDelegateFunc_t<void ( unsigned long )> delay_ms_func, bool do_reset) : void
+	+sendAck(SwiMuxOpcodes_e opcode, SwiMuxDelegateFunc_t<void ( uint8_t )> writer) : void
+	+sendAckArgs(SwiMuxOpcodes_e opcode, uint8_t arg, SwiMuxDelegateFunc_t<void ( uint8_t )> writer) : void
+	+sendNack(SwiMuxError_e error, SwiMuxDelegateFunc_t<void ( uint8_t )> writer) : void
+	+sendUid(SwiMuxRespUID_t& uidResp, SwiMuxDelegateFunc_t<void ( uint8_t )> writer) : void
+}
+
+
+class SwiMuxSerial_t {
+	+SwiMuxSerial_t(HardwareSerial& serial, uint8_t txPin, uint8_t rxPin)
+	-_sPort : HardwareSerial
+	+getSerialPort() : HardwareSerial&
+	-_codec : SwiMuxComms_t
+	-_pollPresencePacket(uint32_t timeout_ms) : SwiMuxPresenceReport_t
+	+getPresence(uint32_t timeout_ms) : SwiMuxPresenceReport_t
+	-_lastResult : SwiMuxSerialResult_e
+	-assertAwake(size_t retries) : bool
+	+hasEvents(SwiMuxPresenceReport_t* reportOut) : bool
+	+isAsleep() : bool
+	-pollAck(SwiMuxOpcodes_e opcode, uint32_t timeout_ms) : bool
+	+sleep() : bool
+	+{static} getSwiMuxErrorString(const SwiMuxSerialResult_e value) : char*
+	+getUid(uint8_t busIndex, uint64_t& result, uint32_t timeout_ms) : int
+	+read(uint8_t busIndex, uint8_t* bufferOut, uint8_t offset, uint8_t len, uint32_t timeout_ms) : int
+	+rollCall(RollCallArray_t& uids, uint32_t timeout_ms) : int
+	+write(uint8_t busIndex, const uint8_t* bufferIn, uint8_t offset, uint8_t len, uint32_t timeout_ms) : int
+	-{static} AWAKE_RETRIES_DEFAULT : static constexpr size_t
+	+{static} DEFAULT_SERIAL_BAUDS : static constexpr uint32_t
+	+{static} DEFAULT_SERIAL_CONFIG : static constexpr uint32_t
+	-{static} GETUID_TIMEOUT_MS : static constexpr uint32_t
+	-{static} PRESENCE_TIMEOUT_MS : static constexpr uint32_t
+	-{static} READ_TIMEOUT_MS : static constexpr uint32_t
+	-{static} ROLLCALL_TIMEOUT_MS : static constexpr uint32_t
+	-{static} WRITE_TIMEOUT_MS : static constexpr uint32_t
+	-lastPresence() : uint16_t
+	-_rxPin : uint8_t
+	-_txPin : uint8_t
+	+begin() : void
+	+printRawString(const char* str) : void
+	-_beginCalled : volatile bool
+	-_isAwake : volatile bool
+}
+
+
+class TankManager {
+	+TankManager(DeviceState& deviceState, SemaphoreHandle_t& mutex)
+	-_deviceState : DeviceState&
+	-testGetSwiMuxPort() : HardwareSerial&
+	-_pwm : PCA9685
+	+closeHopper() : PCA9685::I2C_Result_e
+	+openHopper() : PCA9685::I2C_Result_e
+	+setContinuousServo(uint8_t servoNum, float speed) : PCA9685::I2C_Result_e
+	-setServoPWM(uint8_t servoNum, uint16_t pwm) : PCA9685::I2C_Result_e
+	+stopAllServos() : PCA9685::I2C_Result_e
+	-_swimuxMutex : SemaphoreHandle_t
+	-_deviceStateMutex : SemaphoreHandle_t&
+	-_lastPresenceReport : SwiMuxPresenceReport_t
+	-testSwiMuxAwaken() : SwiMuxPresenceReport_t
+	-testFormat(uint8_t index) : SwiMuxSerialResult_e
+	-testSwiMuxECC(uint8_t busIndex, int& correctedCount) : SwiMuxSerialResult_e
+	-testSwiRead(uint8_t busIndex, uint16_t address, uint8_t* dataOut, uint16_t length) : SwiMuxSerialResult_e
+	-testSwiWrite(uint8_t busIndex, uint16_t address, const uint8_t* dataIn, uint16_t length) : SwiMuxSerialResult_e
+	-_swiMux : SwiMuxSerial_t
+	+getKnownTankOfBus(uint8_t busIndex) : TankInfo*
+	+getKnownTankOfUis(uint64_t uid) : TankInfo*
+	-_isServoMode : bool
+	+commitTankInfo(const TankInfo& tankInfo) : bool
+	+disableSwiMux() : bool
+	+refreshTankInfo(TankInfo& tankInfo) : bool
+	-testRollCall(RollCallArray_t& results) : bool
+	-testSwiMuxSleep(), testSwiBusUID ( uint8_t index, uint64_t& result) : bool
+	-updateEeprom(TankEEpromData_t& data, TankInfo::TankInfoDiscrepancies_e updatesNeeded, int8_t forcedBusIndex) : bool
+	+updateRemaingKibble(const uint64_t uid, uint16_t newRemainingGrams) : bool
+	-{static} q2_14_to_double(uint16_t q_val) : double
+	-{static} q3_13_to_double(uint16_t q_val) : double
+	-TankEEpromData_t : friend struct
+	-TankInfo : friend struct
+	+getBusOfTank(const uint64_t tankUid) : int8_t
+	-{static} _runningTask : static TaskHandle_t
+	-{static} MUTEX_ACQUISITION_TIMEOUT : static constexpr TickType_t
+	-{static} SWIMUX_POWERUP_DELAY_MS : static constexpr uint32_t
+	-_knownTanks : std::vector<TankInfo>
+	-_hopperClosedPwm : uint16_t
+	-_hopperOpenPwm : uint16_t
+	-{static} double_to_q2_14(double d_val) : uint16_t
+	-{static} double_to_q3_13(double d_val) : uint16_t
+	-_switchToServoMode() : void
+	-_switchToSwiMode() : void
+	-{static} _tankDetectionTask(void* pvParam) : void
+	+begin(uint16_t hopper_closed_pwm, uint16_t hopper_open_pwm) : void
+	-doReadTest(TankManager& tankManager, int busIndex) : void
+	-doWriteTest(TankManager& tankManager, int busIndex) : void
+	-fullRefresh() : void
+	+refresh(uint16_t refreshMap) : void
+	-removeKnownTank(TankInfo* tankToRemove) : void
+	-servoTestMenu(TankManager& tankManager ), servoMoveMenu ( TankManager& tankManager, int numServo) : void
+	+setServoPower(bool on) : void
+	+startTask() : void
+	-swiMuxMenu(TankManager& tankManager) : void
+}
+
+
+class TimeKeeping {
+	+TimeKeeping(DeviceState& deviceState, SemaphoreHandle_t& mutex, ConfigManager& configManager)
+	-_configManager : ConfigManager&
+	-_deviceState : DeviceState&
+	-_mutex : SemaphoreHandle_t&
+	-{static} _timekeepingTask(void* pvParameters) : void
+	+begin() : void
+	+startTask() : void
+}
+
+
+class WebServer {
+	+WebServer(DeviceState& deviceState, SemaphoreHandle_t& mutex, ConfigManager& configManager, RecipeProcessor& recipeProcessor, TankManager& tankManager, EPaperDisplay& display)
+	-_server : AsyncWebServer
+	-_configManager : ConfigManager&
+	-_dnsServer : DNSServer
+	-_deviceState : DeviceState&
+	-_display : EPaperDisplay&
+	-_recipeProcessor : RecipeProcessor&
+	-_mutex : SemaphoreHandle_t&
+	-_tankManager : TankManager&
+	+manageWiFiConnection() : bool
+	-_captive_portal_buffer : char*
+	-_scanned_ssids : std::vector<String>
+	-_handleAddRecipe(AsyncWebServerRequest* request, JsonDocument& doc) : void
+	-_handleBody(AsyncWebServerRequest* request, uint8_t* data, size_t len, size_t index, size_t total, std::function<void ( AsyncWebServerRequest*, JsonDocument& )> handler) : void
+	-_handleCalibrateScale(AsyncWebServerRequest* request, JsonDocument& doc) : void
+	-_handleCaptivePortal(AsyncWebServerRequest* request) : void
+	-_handleDeleteRecipe(AsyncWebServerRequest* request) : void
+	-_handleExportSettings(AsyncWebServerRequest* request) : void
+	-_handleFactoryReset(AsyncWebServerRequest* request) : void
+	-_handleFeedImmediate(AsyncWebServerRequest* request, JsonDocument& doc) : void
+	-_handleFeedRecipe(AsyncWebServerRequest* request, JsonDocument& doc) : void
+	-_handleGetFeedingHistory(AsyncWebServerRequest* request) : void
+	-_handleGetFeedingLogs(AsyncWebServerRequest* request) : void
+	-_handleGetNetworkInfo(AsyncWebServerRequest* request) : void
+	-_handleGetRecipes(AsyncWebServerRequest* request) : void
+	-_handleGetScale(AsyncWebServerRequest* request) : void
+	-_handleGetSensorDiagnostics(AsyncWebServerRequest* request) : void
+	-_handleGetServoDiagnostics(AsyncWebServerRequest* request) : void
+	-_handleGetSettings(AsyncWebServerRequest* request) : void
+	-_handleGetStatus(AsyncWebServerRequest* request) : void
+	-_handleGetSystemInfo(AsyncWebServerRequest* request) : void
+	-_handleGetSystemLogs(AsyncWebServerRequest* request) : void
+	-_handleGetTankHistory(AsyncWebServerRequest* request) : void
+	-_handleGetTanks(AsyncWebServerRequest* request) : void
+	-_handleNotFound(AsyncWebServerRequest* request) : void
+	-_handleRestart(AsyncWebServerRequest* request) : void
+	-_handleSetTime(AsyncWebServerRequest* request, JsonDocument& doc) : void
+	-_handleStopFeeding(AsyncWebServerRequest* request) : void
+	-_handleTareScale(AsyncWebServerRequest* request) : void
+	-_handleUpdateRecipe(AsyncWebServerRequest* request, JsonDocument& doc) : void
+	-_handleUpdateSettings(AsyncWebServerRequest* request, JsonDocument& doc) : void
+	-_handleUpdateTank(AsyncWebServerRequest* request, JsonDocument& doc) : void
+	-_handleWifiSave(AsyncWebServerRequest* request) : void
+	-_onUpdate(AsyncWebServerRequest* request, String filename, size_t index, uint8_t* data, size_t len, bool final) : void
+	-_scanWifiNetworks() : void
+	-_setupAPIRoutes() : void
+	-_startAPMode() : void
+	+startAPIServer() : void
+}
+
+
+enum DeviceOperationState_e {
+	DOPSTATE_CALIBRATING
+	DOPSTATE_ERROR
+	DOPSTATE_FEEDING
+	DOPSTATE_IDLE
+}
+
+
+enum ErrorCode {
+	CALIBRATION_REQUIRED
+	EEPROM_WRITE_ERROR
+	HARDWARE_FAULT
+	HOPPER_DOOR_ERROR
+	INSUFFICIENT_FOOD
+	INVALID_PARAMETERS
+	NOT_FOUND
+	RECIPE_NOT_FOUND
+	SAFETY_VIOLATION
+	SCALE_ERROR
+	SCALE_NOT_CALIBRATED
+	SERVO_ERROR
+	SERVO_POWER_DISABLED
+	SUCCESS
+	TANK_DISCONNECTED
+	TANK_NOT_FOUND
+	TIMEOUT_ERROR
+	UNKNOWN_ERROR
+}
+
+
+enum FeedCommandType {
+	EMERGENCY_STOP
+	IMMEDIATE
+	NONE
+	RECIPE
+	TARE_SCALE
+}
+
+
+enum PCA9685::I2C_Result_e {
+	I2C_DataTooLong
+	I2C_NackOnAddress
+	I2C_NackOnData
+	I2C_Ok
+	I2C_Success
+	I2C_Timeout
+	I2C_Unknown
+}
+
+
+enum PCA9685::PCA9685_REGS_t {
+	PCA9685_ALLCALLADR
+	PCA9685_ALLLED_OFF_H
+	PCA9685_ALLLED_OFF_L
+	PCA9685_ALLLED_ON_H
+	PCA9685_ALLLED_ON_L
+	PCA9685_LED0_OFF_H
+	PCA9685_LED0_OFF_L
+	PCA9685_LED0_ON_H
+	PCA9685_LED0_ON_L
+	PCA9685_MODE1
+	PCA9685_MODE2
+	PCA9685_PRESCALE
+	PCA9685_SUBADR1
+	PCA9685_SUBADR2
+	PCA9685_SUBADR3
+	PCA9685_TESTMODE
+}
+
+
+enum SwiMuxError_e {
+	SMERR_BADFUNCALL
+	SMERR_BadCrc
+	SMERR_BusIndexOutOfRange
+	SMERR_CommandDisabled
+	SMERR_Done
+	SMERR_ERRORS
+	SMERR_Framing
+	SMERR_GuidUnreadable
+	SMERR_InProgress
+	SMERR_MemOffsetOutOfRange
+	SMERR_OW_ALIGNED_WRITE_HEAD_PREREAD
+	SMERR_OW_ALIGNED_WRITE_TAIL_PREREAD
+	SMERR_OW_BUS_HELD_LOW
+	SMERR_OW_COPY_SCRATCHPAD
+	SMERR_OW_COPY_SCRATCHPAD_PRESELECT
+	SMERR_OW_DIO_PIN_INVALID
+	SMERR_OW_DIO_PORT_INVALID
+	SMERR_OW_DIO_PORT_NULL
+	SMERR_OW_MEMADDRESS_OUT_OF_BOUNDS
+	SMERR_OW_MULTIDROP_ID_UNREADABLE
+	SMERR_OW_NO_BUS_POWER
+	SMERR_OW_NO_DEVICE_PRESENT
+	SMERR_OW_NULL_INPUT_BUFFER
+	SMERR_OW_NULL_OUTPUT_BUFFER
+	SMERR_OW_OUT_OF_BOUNDS
+	SMERR_OW_PULLUP_PIN_INVALID
+	SMERR_OW_PULLUP_PORT_INVALID
+	SMERR_OW_READ_ROM_FAILED
+	SMERR_OW_READ_SCRATCHPAD_CRC16
+	SMERR_OW_READ_SCRATCHPAD_PRESELECT
+	SMERR_OW_SCRATCHPAD_PF
+	SMERR_OW_WRITE_MEM_FAILED
+	SMERR_OW_WRITE_SCRATCHPAD_CRC16
+	SMERR_OW_WRITE_SCRATCHPAD_PRESELECT
+	SMERR_OW_WRITTEN_SCRATCHPAD_MISMATCH
+	SMERR_Ok
+	SMERR_ReadBytesParams
+	SMERR_ReadLengthOutOfRange
+	SMERR_ReadMemoryFailed
+	SMERR_ResponseEncodingFailed
+	SMERR_UnkownCommand
+	SMERR_WriteFailed
+	SMERR_WriteLengthOutOfRange
+	SMERR_WrongEscape
+}
+
+
+enum SwiMuxOpcodes_e {
+	SMCMD_Ack
+	SMCMD_Autosleep
+	SMCMD_ConnectEvent
+	SMCMD_GetPresence
+	SMCMD_GetUID
+	SMCMD_HaveUID
+	SMCMD_Nack
+	SMCMD_ReadBytes
+	SMCMD_RollCall
+	SMCMD_Sleep
+	SMCMD_Wakeup
+	SMCMD_WriteBytes
+	SMCMD_ZERO
+}
+
+
+enum SwiMuxSerialResult_e {
+	SMREZ_BADFUNCALL
+	SMREZ_BUS_INDEX_OUT_OF_RANGE
+	SMREZ_BadCrc
+	SMREZ_BusIndexOutOfRange
+	SMREZ_CommandDisabled
+	SMREZ_Framing
+	SMREZ_GuidUnreadable
+	SMREZ_INVALID_PAYLOAD
+	SMREZ_MemOffsetOutOfRange
+	SMREZ_MutexAcquisition
+	SMREZ_NO_DEVICE
+	SMREZ_NULL_PARAM
+	SMREZ_OK
+	SMREZ_OW_ALIGNED_WRITE_HEAD_PREREAD
+	SMREZ_OW_ALIGNED_WRITE_TAIL_PREREAD
+	SMREZ_OW_BUS_HELD_LOW
+	SMREZ_OW_COPY_SCRATCHPAD
+	SMREZ_OW_COPY_SCRATCHPAD_PRESELECT
+	SMREZ_OW_DIO_PIN_INVALID
+	SMREZ_OW_DIO_PORT_INVALID
+	SMREZ_OW_DIO_PORT_NULL
+	SMREZ_OW_MEMADDRESS_OUT_OF_BOUNDS
+	SMREZ_OW_MULTIDROP_ID_UNREADABLE
+	SMREZ_OW_NO_BUS_POWER
+	SMREZ_OW_NO_DEVICE_PRESENT
+	SMREZ_OW_NULL_INPUT_BUFFER
+	SMREZ_OW_NULL_OUTPUT_BUFFER
+	SMREZ_OW_OUT_OF_BOUNDS
+	SMREZ_OW_PULLUP_PIN_INVALID
+	SMREZ_OW_PULLUP_PORT_INVALID
+	SMREZ_OW_READ_ROM_FAILED
+	SMREZ_OW_READ_SCRATCHPAD_CRC16
+	SMREZ_OW_READ_SCRATCHPAD_PRESELECT
+	SMREZ_OW_SCRATCHPAD_PF
+	SMREZ_OW_WRITE_MEM_FAILED
+	SMREZ_OW_WRITE_SCRATCHPAD_CRC16
+	SMREZ_OW_WRITE_SCRATCHPAD_PRESELECT
+	SMREZ_OW_WRITTEN_SCRATCHPAD_MISMATCH
+	SMREZ_READ_RESP_ERROR
+	SMREZ_ReadBytesParams
+	SMREZ_ReadLengthOutOfRange
+	SMREZ_ReadMemoryFailed
+	SMREZ_ResponseEncodingFailed
+	SMREZ_SWIMUX_SILENT
+	SMREZ_TIMED_OUT
+	SMREZ_UnkownCommand
+	SMREZ_WRITE_ACK_MISSING
+	SMREZ_WRITE_ENCODE_FAILED
+	SMREZ_WRITE_OUTOFMEM
+	SMREZ_WriteFailed
+	SMREZ_WriteLengthOutOfRange
+	SMREZ_WrongEscape
+}
+
+
+enum TankInfo::TankInfoDiscrepancies_e {
+	TID_ALL
+	TID_BUSINDEX_CHANGED
+	TID_MAC_CHANGED
+	TID_NAME_CHANGED
+	TID_NONE
+	TID_REMAINING_CHANGED
+	TID_SPECS_CHANGED
+}
+
+
+class DeviceState {
+	+operationState : DeviceOperationState_e
+	+feedCommand : FeedCommand
+	+ipAddress : IPAddress
+	+lastRecipe : Recipe
+	+Settings : Settings_t
+	+isWeightStable : bool
+	+operational : bool
+	+safetyModeEngaged : bool
+	+servoPower : bool
+	+getStateString() : char*
+	+formattedTime : char[]
+	+currentWeight : float
+	+wifiStrength : int8_t
+	+currentRawValue : long
+	+lastFeedTime : long long
+	+buildDate : std::string
+	+currentFeedingStatus : std::string
+	+deviceName : std::string
+	+firmwareVersion : std::string
+	+lastError : std::string
+	+feedingHistory : std::vector<FeedingHistoryEntry>
+	+connectedTanks : std::vector<TankInfo>
+	+currentTime : time_t
+	+uptime_s : uint32_t
+	+batteryLevel : uint8_t
+}
+
+
+class FeedCommand {
+	+type : FeedCommandType
+	+processed : bool
+	+amountGrams : float
+	+recipeId : int
+	+servings : int
+	+tankUid : uint64_t
+}
+
+
+class FeedingHistoryEntry {
+	+FeedingHistoryEntry(time_t ts, const std::string& t, int rId, bool s, float a, const std::string& d)
+	+success : bool
+	+amount : float
+	+recipeId : int
+	+description : std::string
+	+type : std::string
+	+timestamp : time_t
+}
+
+
+class Recipe {
+	+isEnabled : bool
+	+dailyWeight : double
+	+id : int
+	+servings : int
+	+created : long long
+	+lastUsed : long long
+	+{static} EMPTY : static const Recipe
+	+name : std::string
+	+ingredients : std::vector<RecipeIngredient>
+}
+
+
+class RecipeIngredient {
+	+percentage : float
+	+tankUid : uint64_t
+}
+
+
+class RollCallArray_t {
+	+bus : uint64_t[]
+}
+
+
+class SwiMuxCmdPresence_t {
+	+Opcode : SwiMuxOpcodes_e
+	+NegOpcode : uint8_t
+	+busesCount : uint8_t
+	+presenceLSB : uint8_t
+	+presenceMSB : uint8_t
+}
+
+
+class SwiMuxCmdRead_t {
+	+Opcode : const SwiMuxOpcodes_e
+	+NegOpcode : const uint8_t
+	+busIndex : const uint8_t
+	+length : const uint8_t
+	+offset : const uint8_t
+}
+
+
+class SwiMuxCmdWrite_t {
+	+Opcode : SwiMuxOpcodes_e
+	+NegOpcode : uint8_t
+	+busIndex : uint8_t
+	+length : uint8_t
+	+offset : uint8_t
+}
+
+
+class SwiMuxGetUID_t {
+	+SwiMuxGetUID_t()
+	+SwiMuxGetUID_t(uint8_t busIndex)
+	+Opcode : const SwiMuxOpcodes_e
+	+NegOpcode : const uint8_t
+	+busIndex : const uint8_t
+}
+
+
+class SwiMuxPresenceReport_t {
+	+SwiMuxPresenceReport_t()
+	+SwiMuxPresenceReport_t(uint16_t presenceMap, uint8_t maxDevices)
+	+operator^(const SwiMuxPresenceReport_t& other) : SwiMuxPresenceReport_t
+	+operator^=(const SwiMuxPresenceReport_t& other) : SwiMuxPresenceReport_t&
+	+operator!=(const SwiMuxPresenceReport_t& other) : bool
+	+operator==(const SwiMuxPresenceReport_t& other) : bool
+	+presences : uint16_t
+	+busesCount : uint8_t
+}
+
+
+class SwiMuxRespUID_t {
+	+SwiMuxRespUID_t()
+	+Opcode : SwiMuxOpcodes_e
+	+uid : UidType_t
+	+NegOpcode : uint8_t
+}
+
+
+class SwiMuxRollCallResult_t {
+	+Opcode : SwiMuxOpcodes_e
+	+orderedUids : UidType_t[]
+	+NegOpCode : uint8_t
+}
+
+
+class TankEEpromData_t {
+	+TankEEpromData_t()
+	+TankEEpromData_t(TankEEpromData_t& other)
+	+TankEEpromData_t(TankEEpromData_t&& other)
+	+data : _EE_RECORD_DATA_
+	+{static} sanitize(TankEEpromData_t& eedata) : bool
+	+{static} DATA_SIZE : static constexpr size_t
+	+{static} ECC_SIZE : static constexpr size_t
+	+{static} NAME_FIELD_SIZE : static constexpr size_t
+	+ecc : uint8_t[]
+	+{static} finalize(TankEEpromData_t& eedata) : void
+	+{static} format(TankEEpromData_t& eedata) : void
+	+{static} printTo(Stream& stream, TankEEpromData_t* eeprom) : void
+}
+
+
+class TankEEpromData_t::_EE_RECORD_DATA_ {
+	+history : <anon-struct-1>
+	+name : char[]
+	+capacity : uint16_t
+	+density : uint16_t
+	+remainingGrams : uint16_t
+	+servoIdlePwm : uint16_t
+	+nameLength : uint8_t
+}
+
+
+class TankEEpromData_t::_EE_RECORD_DATA_::anon_struct_1 {
+	+lastBusIndex : uint8_t
+	+lastBaseMAC48 : uint8_t[]
+}
+
+
+class TankInfo {
+	+TankInfo()
+	#toTankData(TankEEpromData_t& eeprom) : TankInfoDiscrepancies_e
+	#fillFromEeprom(TankEEpromData_t& eeprom) : bool
+	+isFullInfo : bool
+	+capacityLiters : double
+	+kibbleDensity : double
+	+remaining_weight_kg : double
+	+w_capacity_kg : double
+	+busIndex : int8_t
+	+name : std::string
+	+servoIdlePwm : uint16_t
+	+uid : uint64_t
+	+lastBaseMAC48 : uint8_t[]
+}
+
+
+class UidType_t {
+	+value : uint64_t
+	+bytes_LE : uint8_t[]
+}
+
+
+namespace RS {
+	class ReedSolomon <template<const uint8_t msg_length, const uint8_t ecc_length>> {
+		+ReedSolomon()
+		+~ReedSolomon()
+		-polynoms : Poly[]
+		-FindErrorLocator(const Poly* synd, Poly* erase_loc, size_t erase_count) : bool
+		-FindErrors(const Poly* error_loc, size_t msg_in_size) : bool
+		+Decode(const void* src, void* dst, uint8_t* erase_pos, size_t erase_count) : int
+		+DecodeBlock(const void* src, const void* ecc, void* dst, uint8_t* erase_pos, size_t erase_count) : int
+		-memory : uint8_t*
+		-CalcForneySyndromes(const Poly* synd, const Poly* erasures_pos, size_t msg_in_size) : void
+		-CalcSyndromes(const Poly* msg) : void
+		-CorrectErrata(const Poly* synd, const Poly* err_pos, const Poly* msg_in) : void
+		+Encode(const void* src, void* dst) : void
+		+EncodeBlock(const void* src, void* dst) : void
+		-FindErrataLocator(const Poly* epos) : void
+		-FindErrorEvaluator(const Poly* synd, const Poly* errata_loc, Poly* dst, uint8_t ecclen) : void
+		-GeneratorPoly() : void
+	}
+
+	enum ReedSolomon::POLY_ID {
+		ID_COEF_POS
+		ID_ERASURES
+		ID_ERASURES_LOC
+		ID_ERRORS
+		ID_ERRORS_LOC
+		ID_ERR_EVAL
+		ID_FORNEY
+		ID_GENERATOR
+		ID_MSG_E
+		ID_MSG_IN
+		ID_MSG_OUT
+		ID_SYNDROMES
+		ID_TPOLY1
+		ID_TPOLY2
+		ID_TPOLY3
+		ID_TPOLY4
+	}
+
+	class Poly {
+		+Poly()
+		+Poly(uint8_t id, uint16_t offset, uint8_t size)
+		+Append(uint8_t num) : bool
+		#_offset : uint16_t
+		#_id : uint8_t
+		#_size : uint8_t
+		+id() : uint8_t {query}
+		+length : uint8_t
+		+size() : uint8_t {query}
+		+at(uint8_t i) : uint8_t& {query}
+		+ptr() : uint8_t* {query}
+		#_memory : uint8_t**
+		+Copy(const Poly* src) : void
+		+Init(uint8_t id, uint16_t offset, uint8_t size, uint8_t** memory_ptr) : void
+		+Reset() : void
+		+Set(const uint8_t* src, uint8_t len, uint8_t offset) : void
+	}
+}
+
+
+
+
+
+/' Inheritance relationships '/
+
+
+
+
+/' Aggregation relationships '/
+
+DeviceState *-- DeviceOperationState_e
+
+
+DeviceState *-- FeedCommand
+
+
+DeviceState *-- FeedingHistoryEntry
+
+
+DeviceState *-- Recipe
+
+
+DeviceState *-- TankInfo
+
+
+EPaperDisplay *-- DeviceState
+
+
+EPaperDisplay o-- Ssd1680_Driver
+
+
+FeedCommand *-- FeedCommandType
+
+
+HX711Scale *-- ConfigManager
+
+
+HX711Scale *-- DeviceState
+
+
+HX711Scale *-- HX711
+
+
+Recipe *-- Recipe
+
+
+Recipe *-- RecipeIngredient
+
+
+RecipeProcessor *-- ConfigManager
+
+
+RecipeProcessor *-- DeviceState
+
+
+RecipeProcessor *-- HX711Scale
+
+
+RecipeProcessor *-- Recipe
+
+
+RecipeProcessor *-- TankManager
+
+
+ReedSolomon *-- GaloisField
+
+
+RS.ReedSolomon *-- RS.Poly
+
+
+SafetySystem *-- DeviceState
+
+
+SafetySystem *-- TankManager
+
+
+SwiMuxCmdPresence_t *-- SwiMuxOpcodes_e
+
+
+SwiMuxCmdRead_t *-- SwiMuxOpcodes_e
+
+
+SwiMuxCmdWrite_t *-- SwiMuxOpcodes_e
+
+
+SwiMuxComms_t *-- StaticBuffer_t
+
+
+SwiMuxComms_t *-- SwiMuxError_e
+
+
+SwiMuxGetUID_t *-- SwiMuxOpcodes_e
+
+
+SwiMuxRespUID_t *-- SwiMuxOpcodes_e
+
+
+SwiMuxRespUID_t *-- UidType_t
+
+
+SwiMuxRollCallResult_t *-- SwiMuxOpcodes_e
+
+
+SwiMuxRollCallResult_t *-- UidType_t
+
+
+SwiMuxSerial_t *-- SwiMuxComms_t
+
+
+SwiMuxSerial_t *-- SwiMuxSerialResult_e
+
+
+TankManager *-- DeviceState
+
+
+TankManager *-- PCA9685
+
+
+TankManager *-- SwiMuxPresenceReport_t
+
+
+TankManager *-- SwiMuxSerial_t
+
+
+TankManager *-- TankInfo
+
+
+TimeKeeping *-- ConfigManager
+
+
+TimeKeeping *-- DeviceState
+
+
+WebServer *-- ConfigManager
+
+
+WebServer *-- DeviceState
+
+
+WebServer *-- EPaperDisplay
+
+
+WebServer *-- RecipeProcessor
+
+
+WebServer *-- TankManager
+
+
+
+
+
+
+/' Dependency relationships '/
+
+ConfigManager <.. HX711Scale
+
+
+ConfigManager <.. RecipeProcessor
+
+
+ConfigManager <.. TimeKeeping
+
+
+ConfigManager <.. WebServer
+
+
+DeviceState <.. EPaperDisplay
+
+
+DeviceState <.. HX711Scale
+
+
+DeviceState <.. RecipeProcessor
+
+
+DeviceState <.. SafetySystem
+
+
+DeviceState <.. TankManager
+
+
+DeviceState <.. TimeKeeping
+
+
+DeviceState <.. WebServer
+
+
+EPaperDisplay <.. WebServer
+
+
+HX711Scale <.. RecipeProcessor
+
+
+RS.Poly <.. RS.Poly
+
+
+RS.Poly <.. RS.ReedSolomon
+
+
+RS.Poly <.. RS.ReedSolomon
+
+
+RS.Poly <.. RS.ReedSolomon
+
+
+RS.Poly <.. RS.ReedSolomon
+
+
+RS.Poly <.. RS.ReedSolomon
+
+
+RS.Poly <.. RS.ReedSolomon
+
+
+RS.Poly <.. RS.ReedSolomon
+
+
+RS.Poly <.. RS.ReedSolomon
+
+
+RS.Poly <.. RS.ReedSolomon
+
+
+RS.Poly <.. RS.ReedSolomon
+
+
+RS.Poly <.. RS.ReedSolomon
+
+
+RS.Poly <.. RS.ReedSolomon
+
+
+RS.Poly <.. RS.ReedSolomon
+
+
+Recipe <.. ConfigManager
+
+
+Recipe <.. RecipeProcessor
+
+
+Recipe <.. RecipeProcessor
+
+
+RecipeProcessor <.. WebServer
+
+
+RollCallArray_t <.. SwiMuxSerial_t
+
+
+RollCallArray_t <.. TankManager
+
+
+SwiMuxError_e <.. SwiMuxComms_t
+
+
+SwiMuxOpcodes_e <.. SwiMuxComms_t
+
+
+SwiMuxOpcodes_e <.. SwiMuxComms_t
+
+
+SwiMuxOpcodes_e <.. SwiMuxComms_t
+
+
+SwiMuxOpcodes_e <.. SwiMuxSerial_t
+
+
+SwiMuxPresenceReport_t <.. SwiMuxPresenceReport_t
+
+
+SwiMuxPresenceReport_t <.. SwiMuxPresenceReport_t
+
+
+SwiMuxPresenceReport_t <.. SwiMuxPresenceReport_t
+
+
+SwiMuxPresenceReport_t <.. SwiMuxPresenceReport_t
+
+
+SwiMuxPresenceReport_t <.. SwiMuxSerial_t
+
+
+SwiMuxRespUID_t <.. SwiMuxComms_t
+
+
+SwiMuxSerialResult_e <.. SwiMuxSerial_t
+
+
+TankEEpromData_t <.. TankEEpromData_t
+
+
+TankEEpromData_t <.. TankEEpromData_t
+
+
+TankEEpromData_t <.. TankEEpromData_t
+
+
+TankEEpromData_t <.. TankEEpromData_t
+
+
+TankEEpromData_t <.. TankEEpromData_t
+
+
+TankEEpromData_t <.. TankEEpromData_t
+
+
+TankEEpromData_t <.. TankInfo
+
+
+TankEEpromData_t <.. TankInfo
+
+
+TankEEpromData_t <.. TankManager
+
+
+TankInfo <.. TankManager
+
+
+TankInfo <.. TankManager
+
+
+TankInfo <.. TankManager
+
+
+TankManager <.. RecipeProcessor
+
+
+TankManager <.. SafetySystem
+
+
+TankManager <.. TankManager
+
+
+TankManager <.. TankManager
+
+
+TankManager <.. TankManager
+
+
+TankManager <.. TankManager
+
+
+TankManager <.. WebServer
+
+
+
+
+
+
+/' Nested objects '/
+
+DeviceState +-- DeviceState::Settings_t
+
+
+PCA9685 +-- PCA9685::I2C_Result_e
+
+
+PCA9685 +-- PCA9685::PCA9685_REGS_t
+
+
+RS.ReedSolomon +-- RS.ReedSolomon.POLY_ID
+
+
+TankEEpromData_t +-- TankEEpromData_t::_EE_RECORD_DATA_
+
+
+TankInfo +-- TankInfo::TankInfoDiscrepancies_e
+
+
+
+
+@enduml

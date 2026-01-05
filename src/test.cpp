@@ -9,7 +9,7 @@
 //#include <hal/gpio_ll.h>
 #include <hal/gpio_hal.h>
 #include "SerialDebugger.hpp"
-
+#include "ReedSolomon.hpp"
 
 static const char* TAG = "DebugTest";
 
@@ -318,13 +318,14 @@ void doReadTest(TankManager& tankManager, int busIndex)
     SwiMuxSerialResult_e res = tankManager.testSwiRead(busIndex, 0, buff, 128);
     endTime                  = micros();
     if (res != SwiMuxSerialResult_e::SMREZ_OK) {
-        Serial.printf("FAILED !!!\r\nRead error: %d\r\n", SwiMuxSerial_t::getResultValueName(res));
+        Serial.printf("FAILED !!!\r\nRead error: %d\r\n", SwiMuxSerial_t::getSwiMuxErrorString(res));
     } else {
         Serial.println("success");
     }
     Serial.printf("Read operation took %9.3f milliseconds.\r\n", (double)(endTime - startTime) * 1E-3);
     DebugSerial.print("Read buffer contents (ASCII):\r\n", buff, 128, 16, 'a', false, false, nullptr);
     DebugSerial.print("Read buffer contents (HEX):\r\n", buff, 128, 8, 16);
+    TankEEpromData_t::printTo(Serial, (TankEEpromData_t*)buff);
 
     if (buff)
         free(buff);
@@ -349,7 +350,7 @@ void doWriteTest(TankManager& tankManager, int busIndex)
     Serial.print("Starting write test:\r\n • reading initial content: ");
     res = tankManager.testSwiRead(busIndex, 0, initial_contents, 128);
     if (res != SMREZ_OK) {
-        Serial.printf("FAILED (%s)!!\r\n", SwiMuxSerial_t::getResultValueName(res));
+        Serial.printf("FAILED (%s)!!\r\n", SwiMuxSerial_t::getSwiMuxErrorString(res));
         goto EndOfDoWriteTest;
     }
     Serial.println("ok\r\n");
@@ -360,7 +361,7 @@ void doWriteTest(TankManager& tankManager, int busIndex)
     res       = tankManager.testSwiWrite(busIndex, 0, (const uint8_t*)Lorem, LOREM_LENGTH);
     endTime   = micros();
     if (res != SMREZ_OK) {
-        Serial.printf("FAILED (%s)!!\r\n", SwiMuxSerial_t::getResultValueName(res));
+        Serial.printf("FAILED (%s)!!\r\n", SwiMuxSerial_t::getSwiMuxErrorString(res));
         goto EndOfDoWriteTest;
     }
     Serial.printf("ok (%9.3fms)\r\n • checking write buffer for writebacks: ", (double)(endTime - startTime) * 1E-3);
@@ -376,7 +377,7 @@ void doWriteTest(TankManager& tankManager, int busIndex)
     Serial.print("ok (none)\r\n • first readback from mem: ");
     res = tankManager.testSwiRead(busIndex, 0, (uint8_t*)dest, LOREM_LENGTH);
     if (res != SMREZ_OK) {
-        Serial.printf("FAILED (%s)!!\r\n", SwiMuxSerial_t::getResultValueName(res));
+        Serial.printf("FAILED (%s)!!\r\n", SwiMuxSerial_t::getSwiMuxErrorString(res));
         goto EndOfDoWriteTest;
     }
 
@@ -410,7 +411,7 @@ void doWriteTest(TankManager& tankManager, int busIndex)
             totTime += endTime - startTime;
             if (res != SMREZ_OK) {
                 Serial.printf("FAILED to write at offset 0x%02x on iter #%d (err #%d, \"%s\") !\r\n", address, iter, res,
-                  SwiMuxSerial_t::getResultValueName(res));
+                  SwiMuxSerial_t::getSwiMuxErrorString(res));
             } else {
                 Serial.printf("successfully wrote at address %d in %9.3fms\r\n", address, (double)(endTime - startTime) * 1E-3);
             }
@@ -422,7 +423,7 @@ void doWriteTest(TankManager& tankManager, int busIndex)
     Serial.print("Done\r\n • second readback ");
     res = tankManager.testSwiRead(busIndex, 0, (uint8_t*)dest, LOREM_LENGTH);
     if (res != SMREZ_OK) {
-        Serial.printf("FAILED (%s)!!\r\n", SwiMuxSerial_t::getResultValueName(res));
+        Serial.printf("FAILED (%s)!!\r\n", SwiMuxSerial_t::getSwiMuxErrorString(res));
         goto EndOfDoWriteTest;
     }
     Serial.printf(" • resulting content: %s", dest);
@@ -431,7 +432,7 @@ void doWriteTest(TankManager& tankManager, int busIndex)
     Serial.print("\r\n • restoring initial content:");
     res = tankManager.testSwiWrite(busIndex, 0, initial_contents, 128);
     if (res != SMREZ_OK) {
-        Serial.printf("FAILED (%s) !! INITIAL CONTENT LOST !!\r\n", SwiMuxSerial_t::getResultValueName(res));
+        Serial.printf("FAILED (%s) !! INITIAL CONTENT LOST !!\r\n", SwiMuxSerial_t::getSwiMuxErrorString(res));
         goto EndOfDoWriteTest;
     }
     Serial.println("ok");
@@ -442,6 +443,166 @@ EndOfDoWriteTest:
     Serial.println();
     return;
 }
+
+static void testDecodeAndCompare(
+  ReedSolomon<TankEEpromData_t::DATA_SIZE, TankEEpromData_t::ECC_SIZE>& rs, TankEEpromData_t& original, TankEEpromData_t subject)
+{
+    int dataErrorsBits = 0, eccErrorBits = 0, realErrorBitsTotal = 0;
+    uint8_t* pOrg  = (uint8_t*)(void*)&original.data;
+    uint8_t* pSubj = (uint8_t*)(void*)&subject.data;
+    Serial.print("Initial comparison of original against test data:\r\n");
+    for (int idx = 0; idx < TankEEpromData_t::DATA_SIZE; idx++) {
+        dataErrorsBits += __builtin_popcount(pOrg[idx] ^ pSubj[idx]);
+    }
+    Serial.printf("Errors in data: %d\r\n", dataErrorsBits);
+    pOrg  = (uint8_t*)(void*)&original.ecc;
+    pSubj = (uint8_t*)(void*)&subject.ecc;
+    for (int idx = 0; idx < TankEEpromData_t::ECC_SIZE; idx++) {
+        eccErrorBits += __builtin_popcount(pOrg[idx] ^ pSubj[idx]);
+    }
+    Serial.printf("Errors in ECC bytes: %d\r\nNow trying to correct...", eccErrorBits);
+    realErrorBitsTotal = dataErrorsBits + eccErrorBits;
+    bool success       = false;
+    int errorsDetected = rs.decode((uint8_t*)&subject.data, (uint8_t*)&subject.ecc);
+
+    if (errorsDetected > 0) {
+        Serial.printf("allegedly corrected %d errors.\r\n", errorsDetected);
+    } else if (errorsDetected == 0) {
+        if (dataErrorsBits == 0 && eccErrorBits == 0) {
+            Serial.print("no errors detected.\r\nSUCCESS: TRUE POSITIVE.\r\n");
+            success = true;
+        } else {
+            Serial.printf("no errors detected despite the previous results (%d errors, %d in data & %D in ecc).\r\nFAILURE: FALSE NEGATIVE\r\n",
+              realErrorBitsTotal, dataErrorsBits, eccErrorBits);
+        }
+    } else if (errorsDetected < 0) {
+        if (realErrorBitsTotal > (TankEEpromData_t::ECC_SIZE / 2)) {
+            Serial.printf("Too many errors detected (expectedly unsolvable).\r\nSUCCESS: TRUE NEGATIVE\r\n");
+            success = true;
+        } else {
+            Serial.printf("Too many errors detected (unexpected failure).\r\nFAILURE: FALSE POSITIVE\r\n");
+        }
+    }
+    Serial.print("Comparing corrected data to original...");
+    dataErrorsBits = 0;
+    eccErrorBits   = 0;
+    pOrg           = (uint8_t*)(void*)&original.data;
+    pSubj          = (uint8_t*)(void*)&subject.data;
+    for (int idx = 0; idx < TankEEpromData_t::DATA_SIZE; idx++) {
+        dataErrorsBits += __builtin_popcount(pOrg[idx] ^ pSubj[idx]);
+    }
+    pOrg  = (uint8_t*)(void*)&original.ecc;
+    pSubj = (uint8_t*)(void*)&subject.ecc;
+    for (int idx = 0; idx < TankEEpromData_t::ECC_SIZE; idx++) {
+        eccErrorBits += __builtin_popcount(pOrg[idx] ^ pSubj[idx]);
+    }
+    if (dataErrorsBits || eccErrorBits) {
+        Serial.printf("%d in data, %d in ecc.\r\n", dataErrorsBits, eccErrorBits);
+    } else {
+        Serial.print("identical.\r\n");
+    }
+}
+
+static void genRandPick(uint16_t* samplesBuffer, uint16_t samplesBufferCount, uint16_t maxValue, uint16_t offset = 0)
+{
+    for (uint16_t i = 0; i < samplesBufferCount; ++i) {
+        uint16_t v;
+        bool unique;
+
+        do {
+            v = (uint16_t)(esp_random() % maxValue);
+            unique = true;
+            // Check against previously stored values
+            for (uint16_t j = 0; j < i; ++j) {
+                // BUG FIX: Compare v against the stored value MINUS offset
+                // OR compare (v + offset) against stored value
+                if (samplesBuffer[j] == (v + offset)) {
+                    unique = false;
+                    break;
+                }
+            }
+        } while (!unique);
+
+        samplesBuffer[i] = v + offset;
+    }
+}
+
+static void genRsTestData(TankEEpromData_t& original, TankEEpromData_t& corrupted, int dataErrorBits, int eccErrorBits)
+{
+    int samplesCount        = dataErrorBits + eccErrorBits;
+    uint16_t* bitsLocations = (uint16_t*)malloc(sizeof(uint16_t) * samplesCount);
+    if (bitsLocations == nullptr) {
+        ESP_LOGE(TAG, "Failed to allocate %d bytes of memory for `genRsTestData`", sizeof(uint16_t) * samplesCount);
+        return;
+    }
+    // Create random permuation locations for the data section
+    if (dataErrorBits)
+        genRandPick(&bitsLocations[0], dataErrorBits, 8 * TankEEpromData_t::DATA_SIZE);
+    // Create random permuation locations for the ecc section
+    if (eccErrorBits)
+        genRandPick(&bitsLocations[dataErrorBits], eccErrorBits, 8 * TankEEpromData_t::ECC_SIZE, 8 * (uint16_t)TankEEpromData_t::DATA_SIZE);
+
+    memcpy(&corrupted, &original, sizeof(TankEEpromData_t));
+    uint8_t* pSubjects = (uint8_t*)(void*)&corrupted;
+    while (samplesCount--) {
+        pSubjects[bitsLocations[samplesCount] >> 3] ^= (1 << (bitsLocations[samplesCount] & 7)); // flip the bit
+    }
+    if (bitsLocations != nullptr)
+        free(bitsLocations);
+}
+
+static void testReedSolomon()
+{
+    auto* pRS                          = new ReedSolomon<TankEEpromData_t::DATA_SIZE, TankEEpromData_t::ECC_SIZE>();
+    TankEEpromData_t* pEepromOriginal  = new TankEEpromData_t();
+    TankEEpromData_t* pEepromCorrupted = new TankEEpromData_t();
+    TankEEpromData_t::format(*pEepromOriginal);
+    TankEEpromData_t::_EE_RECORD_DATA_* pInputData = (TankEEpromData_t::_EE_RECORD_DATA_*)malloc(TankEEpromData_t::DATA_SIZE);
+    if (pRS == nullptr || pEepromOriginal == nullptr || pInputData == nullptr) {
+        ESP_LOGE(TAG, "Could not allocate resources for this test.\r\n");
+        goto EndOftestReedSolomon;
+    }
+
+    memcpy(pInputData, pEepromOriginal, TankEEpromData_t::DATA_SIZE);
+    if (memcmp(pInputData, pEepromOriginal, TankEEpromData_t::DATA_SIZE) != 0) {
+        ESP_LOGE(TAG, "Failed to copy test input data (memcpy failed).\r\n");
+        goto EndOftestReedSolomon;
+    }
+
+    Serial.print("\r\nReedSolomon class test:\r\n");
+    pRS->encode((const uint8_t*)&pEepromOriginal->data, (uint8_t*)&pEepromOriginal->ecc);
+    DebugSerial.print("Input data", pInputData, TankEEpromData_t::DATA_SIZE);
+
+    Serial.print("\r\n Reference test: (unalterated data)\r\n");
+    memcpy(pEepromCorrupted, pEepromOriginal, sizeof(TankEEpromData_t));
+    testDecodeAndCompare(*pRS, *pEepromOriginal, *pEepromCorrupted);
+
+    //TODO: Add more tests
+    for (int idx = 1; idx < ((TankEEpromData_t::ECC_SIZE / 2) + 4); idx++) {
+        int dataErrsCount = idx;
+        int eccErrsCount  = 0;
+        if (dataErrsCount > 1) {
+            eccErrsCount = esp_random() % (dataErrsCount / 2);
+            dataErrsCount -= eccErrsCount;
+        }
+        Serial.printf("\r\nTEST #%d: %d error%s in data, %d error%s in ecc %s\r\n", idx, dataErrsCount, (dataErrsCount > 1 ? "s" : ""), eccErrsCount,
+          (eccErrsCount > 1 ? "s" : ""), (idx > TankEEpromData_t::ECC_SIZE / 2) ? "(ECC overburdened)" : "");
+        genRsTestData(*pEepromOriginal, *pEepromCorrupted, dataErrsCount, eccErrsCount);
+        Serial.printf("Results of test #%d:\r\n", idx);
+        testDecodeAndCompare(*pRS, *pEepromOriginal, *pEepromCorrupted);
+        if (idx >= (TankEEpromData_t::ECC_SIZE / 2))
+            idx++; // skip one test index
+    }
+
+
+EndOftestReedSolomon:
+    if (pInputData)
+        free(pInputData);
+    delete pEepromCorrupted;
+    delete pEepromOriginal;
+    delete pRS;
+}
+
 
 void swiMuxMenu(TankManager& tankManager)
 {
@@ -459,18 +620,21 @@ void swiMuxMenu(TankManager& tankManager)
         Serial.println("7. Report bytes count in RX buffer");
         Serial.println("8. Perform read test.");
         Serial.println("9. Perform Write tests. (DATA WILL BE WIPED)");
-        Serial.println("Q. Back to Main Menu");
+        Serial.println("10. Format memory");
+        Serial.println("11. Check memory's ECC");
+        Serial.println("12. Test ReedSolomon class");
+        Serial.println("99. Back to Main Menu");
         Serial.print("Enter choice: ");
 
         flushSerialInputBuffer();
         while (!Serial.available()) {
             vTaskDelay(pdMS_TO_TICKS(50));
         }
-        char choice = Serial.read();
+        char choice = readSerialInt();
         Serial.print(choice);
         Serial.println();
         switch (choice) {
-            case '0': // Get presence report
+            case 0: // Get presence report
                 {
                     SwiMuxPresenceReport_t res = tankManager.testSwiMuxAwaken();
                     if (res.busesCount) {
@@ -481,7 +645,7 @@ void swiMuxMenu(TankManager& tankManager)
                     }
                 }
                 break;
-            case '1':
+            case 1:
                 {
                     RollCallArray_t results;
                     if (tankManager.testRollCall(results)) {
@@ -494,7 +658,7 @@ void swiMuxMenu(TankManager& tankManager)
                     }
                 }
                 break;
-            case '2': // Scan specific bus (gets UID)
+            case 2: // Scan specific bus (gets UID)
                 {
                     Serial.print("Enter bus number to scan [0..5]:>");
                     int busIndex = readSerialInt();
@@ -513,7 +677,7 @@ void swiMuxMenu(TankManager& tankManager)
                 }
                 break;
 
-            case '3':
+            case 3:
                 {
                     Serial.println("Scanning all SwiMux buses (0 to 5):\r\n");
                     for (int i = 0; i < 6; i++) {
@@ -528,12 +692,12 @@ void swiMuxMenu(TankManager& tankManager)
                 }
                 break;
 
-            case '4':
+            case 4:
                 Serial.println("Putting SwiMux interface to sleep.");
                 tankManager.disableSwiMux();
                 break;
 
-            case '5':
+            case 5:
                 Serial.println("Swimux interface serial port open.");
                 Serial.println("Press \033[91m [Ctrl]+[Z] \033[0m to exit.");
                 {
@@ -554,13 +718,13 @@ void swiMuxMenu(TankManager& tankManager)
                     } while (outChar != 0x1A && inChar != 0x1A); // break upon 'SUB' (ctrl-z)
                 }
                 break;
-            case '6':
+            case 6:
                 listenToPort(tankManager.testGetSwiMuxPort());
                 break;
-            case '7':
+            case 7:
                 Serial.printf("Bytes in buffer: %d\r\n\n", tankManager.testGetSwiMuxPort().available());
                 break;
-            case '8':
+            case 8:
                 Serial.print("\nWhich bus to read from ? [0-5]:");
                 {
                     int busIndex = readSerialInt();
@@ -572,7 +736,7 @@ void swiMuxMenu(TankManager& tankManager)
                     doReadTest(tankManager, busIndex);
                 }
                 break;
-            case '9':
+            case 9:
                 Serial.print("\nWhich bus to write on ? [0-5]:");
                 {
                     int busIndex = readSerialInt();
@@ -580,7 +744,7 @@ void swiMuxMenu(TankManager& tankManager)
                         Serial.println("\r\nWrong value. Write abored.");
                         break;
                     }
-                    Serial.print("Press [W] to start write test, any other key to abort:");
+                    Serial.print("Press [W] (uppercase) to start write test, any other key to abort:");
                     flushSerialInputBuffer();
                     {
 
@@ -589,7 +753,7 @@ void swiMuxMenu(TankManager& tankManager)
                             charVal = Serial.read();
                             if (charVal > 0) {
                                 Serial.print((char)charVal);
-                                if (charVal != 'w' && charVal != 'W') {
+                                if (charVal != 'W') {
                                     Serial.println("\r\nWrite test aborted.");
                                     break;
                                 }
@@ -601,9 +765,71 @@ void swiMuxMenu(TankManager& tankManager)
                     }
                 }
                 break;
-            case 'q':
-                [[fallthrough]];
-            case 'Q':
+            case 10:
+                Serial.print("\nWhich bus to format ? [0-5]:");
+                {
+                    int busIndex = readSerialInt();
+                    if (busIndex < 0 || busIndex > NUMBER_OF_BUSES) {
+                        Serial.println("\r\nWrong value. Write abored.");
+                        break;
+                    }
+                    Serial.print("Press [F] (uppercase) to start formatting, any other key to abort:");
+                    flushSerialInputBuffer();
+                    flushSerialInputBuffer();
+                    {
+
+                        int charVal;
+                        do {
+                            charVal = Serial.read();
+                            if (charVal > 0) {
+                                Serial.print((char)charVal);
+                                if (charVal != 'F') {
+                                    Serial.println("\r\nFormatting aborted.");
+                                    break;
+                                }
+                                Serial.println();
+                                SwiMuxSerialResult_e res = tankManager.testFormat(busIndex);
+                                if (res == SwiMuxSerialResult_e::SMREZ_OK) {
+                                    Serial.printf("\r\nFormatting on bus #%d successful.\r\n", busIndex);
+                                } else if (res == SwiMuxSerialResult_e::SMREZ_MutexAcquisition) { // mutex acquisition failed.
+                                    Serial.print("\r\nFAILED to acquire the SwiMux mutex.\r\n");
+                                } else {
+                                    Serial.printf("\r\nFAILED with \"%s\" error.", SwiMuxSerial_t::getSwiMuxErrorString(res));
+                                }
+                                break;
+                            }
+                        } while (charVal <= 0);
+                    }
+                }
+                break;
+            case 11:
+                Serial.print("\nWhich bus to check ? [0-5]:");
+                {
+                    int busIndex = readSerialInt();
+                    if (busIndex < 0 || busIndex > NUMBER_OF_BUSES) {
+                        Serial.println("\r\nWrong bus index value.");
+                        break;
+                    }
+                    Serial.println();
+                    int corrections;
+                    SwiMuxSerialResult_e result = tankManager.testSwiMuxECC(busIndex, corrections);
+                    if (result == SMREZ_OK) {
+                        if (corrections < 0) {
+                            Serial.print("\r\nECC check failed, too many errors.\r\n");
+                        } else {
+                            Serial.printf("\r\nECC check passed successfully on bus #%d, %d error%s corrected in the process.\r\n", busIndex, result,
+                              (result > 2 ? "s" : ""));
+                        }
+                    } else {
+                        Serial.printf("\r\nFAILED with error \"%s\"\r\n", SwiMuxSerial_t::getSwiMuxErrorString(result));
+                    }
+                    break;
+                }
+                break;
+            case 12:
+                testReedSolomon();
+                break;
+            case 99:
                 testing = false;
                 break;
 
@@ -771,7 +997,7 @@ void doDebugTest(TankManager& tankManager, HX711Scale& scale)
     while (testing) {
         Serial.println("\n--- Main Test Menu ---");
         Serial.println("1. Servo Tests (PCA9685)");
-        Serial.println("2. SwiMux tests (AT21CS01 chips through a CH32V003)");
+        Serial.println("2. SwiMux tests (DS28E07 chips through a CH32V003)");
         Serial.println("3. Scale Tests (HX711)");
         Serial.println("q. Quit and Resume Operation");
         Serial.print("Enter choice: ");

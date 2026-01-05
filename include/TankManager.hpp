@@ -8,6 +8,7 @@
 #include "board_pinout.h"
 #include "SwiMuxSerial.h"
 
+
 // Forward-declare DeviceState to break circular dependency.
 struct DeviceState;
 
@@ -23,7 +24,8 @@ struct DeviceState;
 
 /** @brief Data structure for the tank's EEPROM, and UID. */
 struct __attribute__((packed)) TankEEpromData_t {
-    struct __attribute__((packed)) _RECORD_ {
+    // Data Section (96 bytes)
+    struct __attribute__((packed)) _EE_RECORD_DATA_ {
         struct __attribute__((packed)) {
             uint8_t lastBaseMAC48[6]; // Last MAC48 of the KibbleT5 base this device was connected to.
             uint8_t lastBusIndex; // Last bus index this device was connected to.
@@ -32,16 +34,40 @@ struct __attribute__((packed)) TankEEpromData_t {
         uint16_t capacity; // Capacity, in liters, as an unsigned Q3.13 number.
         uint16_t density; // A Q2.14 unsigned fixed number for kibble density in kg/L.
         uint16_t servoIdlePwm; // The PWM value (in microseconds) for the servo's idle position.
-        uint16_t remainingGrams; // Remaining kibble in grams, with redundancy.
-        char name[44]; // The name of the tank. In UTF-8 hopefully ?
-        uint32_t crc; // ends up on byte 60, right on a DWORD alignment.
-    } records[2];
-    static void finalize(TankEEpromData_t& eedata, uint8_t recordToKeep = 0);
-    static uint32_t getCrc32(TankEEpromData_t& eedata, uint8_t recordIndex = 0);
+        uint16_t remainingGrams; // Remaining kibble in grams.
+        char name[80]; // The name of the tank. In UTF-8 hopefully ? (96 - 16 header bytes = 80)
+    } data;
+
+    // ECC Section (32 bytes)
+    uint8_t ecc[32];
+
+    TankEEpromData_t(){
+        memset(&data,0, DATA_SIZE);
+        memset(&ecc,0,ECC_SIZE);
+    }
+
+    TankEEpromData_t(TankEEpromData_t &other){
+        memcpy(&data,&other.data,DATA_SIZE);
+        memcpy(&ecc,&other.ecc,ECC_SIZE);
+    }
+
+    TankEEpromData_t(TankEEpromData_t &&other){
+        memcpy(&data,&other.data,DATA_SIZE);
+        memcpy(&ecc,&other.ecc,ECC_SIZE);
+    }
+
+    /** @brief Sets the structure to a default "New Tank" state. */
+    static void format(TankEEpromData_t& eedata);
+    /** @brief Computes and writes the `eec`field from the `data` field */
+    static void finalize(TankEEpromData_t& eedata);
+    /** @brief Checks validity and attempts to repair corrupted data using RS-FEC. Returns false if unrecoverable. */
     static bool sanitize(TankEEpromData_t& eedata);
-    static void make_crc32(uint32_t& crc, const uint8_t val);
-    static uint32_t constexpr CRC_INIT_VALUE     = 0xFFFFFFFFUL;
-    static size_t constexpr CRC_COMPUTATION_SPAN = sizeof(TankEEpromData_t::_RECORD_) - sizeof(TankEEpromData_t::_RECORD_::crc);
+    static void printTo(Stream& stream, TankEEpromData_t* eeprom);
+    static constexpr size_t DATA_SIZE = sizeof(data);
+    static constexpr size_t ECC_SIZE  = sizeof(ecc);
+    static constexpr size_t NAME_FIELD_SIZE = sizeof(data.name);
+
+
 };
 
 /**
@@ -123,7 +149,7 @@ class TankManager {
      */
     void refresh(uint16_t refreshMap = 0xFFFFU);
 
-    void startTask() { xTaskCreate(TankManager::_tankDetectionTask, "TankManager", 3 * 1024, this, 11, &TankManager::_runningTask); }
+    void startTask() { xTaskCreate(TankManager::_tankDetectionTask, "TankManager", 5 * 1024UL, this, 11, &TankManager::_runningTask); }
     /**
      * @brief Update both local memory and eeprom so that the amount of remaining kibble is set to a new value.
      * @param uid Uid of the tank to update.
@@ -182,6 +208,7 @@ class TankManager {
 
 
   private:
+    friend struct TankEEpromData_t;
 #ifdef KIBBLET5_DEBUG_ENABLED
     friend void swiMuxMenu(TankManager& tankManager);
     friend void servoTestMenu(TankManager& tankManager), servoMoveMenu(TankManager& tankManager, int numServo);
@@ -193,6 +220,8 @@ class TankManager {
     bool testSwiMuxSleep(), testSwiBusUID(uint8_t index, uint64_t& result);
     inline HardwareSerial& testGetSwiMuxPort() { return _swiMux.getSerialPort(); }
     bool testRollCall(RollCallArray_t& results);
+    SwiMuxSerialResult_e testFormat(uint8_t index);
+    SwiMuxSerialResult_e testSwiMuxECC(uint8_t busIndex, int& correctedCount);
     SwiMuxSerialResult_e testSwiRead(uint8_t busIndex, uint16_t address, uint8_t* dataOut, uint16_t length);
     SwiMuxSerialResult_e testSwiWrite(uint8_t busIndex, uint16_t address, const uint8_t* dataIn, uint16_t length);
 #endif
@@ -232,7 +261,7 @@ class TankManager {
     static inline double q2_14_to_double(uint16_t q_val) { return (double)q_val / 16384.0; }
     static inline uint16_t double_to_q2_14(double d_val) { return (uint16_t)(d_val * 16384.0); }
 
-    void presenceRefresh(), fullRefresh();
+    inline void fullRefresh() { refresh(0xFFFF); }
     static void _tankDetectionTask(void* pvParam);
 
     /** @brief Selectively updates an eeprom through the _swiMux adapter. 
@@ -243,5 +272,6 @@ class TankManager {
      * @remark This method will try to engage in the least amount of SwiMuxSerial_t::write transactions as possible (contiguous fields/fields groups to be updated will be written in one operation if possible). */
     bool updateEeprom(TankEEpromData_t& data, TankInfo::TankInfoDiscrepancies_e updatesNeeded, int8_t forcedBusIndex = -1);
 };
+
 
 #endif // TANKMANAGER_HPP

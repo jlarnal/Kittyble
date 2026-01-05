@@ -57,6 +57,7 @@ enum SwiMuxSerialResult_e : uint8_t /* Includes proprietary values as well as va
     SMREZ_BadCrc,
     SMREZ_BADFUNCALL, // critial software error
     SMREZ_CommandDisabled,
+    SMREZ_MutexAcquisition,
 };
 
 
@@ -145,7 +146,7 @@ class SwiMuxSerial_t {
 
 #endif
 
-    static const char* getResultValueName(const SwiMuxSerialResult_e value);
+    static const char* getSwiMuxErrorString(const SwiMuxSerialResult_e value);
     static constexpr uint32_t DEFAULT_SERIAL_CONFIG = SERIAL_8N1;
     static constexpr uint32_t DEFAULT_SERIAL_BAUDS  = 57600;
 

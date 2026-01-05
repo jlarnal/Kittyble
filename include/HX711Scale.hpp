@@ -1,7 +1,7 @@
 #ifndef HX711SCALE_HPP
 #define HX711SCALE_HPP
 
-#include <HX711.h>
+#include "HX711.h"
 #include "DeviceState.hpp"
 #include "ConfigManager.hpp"
 

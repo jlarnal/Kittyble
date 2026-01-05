@@ -25,7 +25,7 @@ static const char* TAG = "SwiMuxSerial";
 #define SWI_DBG_FLUSH()               _NOP()
 #endif
 
-const char* SwiMuxSerial_t::getResultValueName(const SwiMuxSerialResult_e value)
+const char* SwiMuxSerial_t::getSwiMuxErrorString(const SwiMuxSerialResult_e value)
 {
     switch (value) {
         case SwiMuxSerialResult_e::SMREZ_OK:
@@ -130,6 +130,8 @@ const char* SwiMuxSerial_t::getResultValueName(const SwiMuxSerialResult_e value)
             return "SMREZ_BADFUNCALL";
         case SwiMuxSerialResult_e::SMREZ_CommandDisabled:
             return "SMREZ_CommandDisabled";
+        case SwiMuxSerialResult_e::SMREZ_MutexAcquisition:
+            return "SMREZ_MutexAcquisition";
         default:
             break;
     }
@@ -266,7 +268,7 @@ SwiMuxPresenceReport_t SwiMuxSerial_t::_pollPresencePacket(uint32_t timeout_ms)
     size_t pLen                   = 0;
     uint32_t startTime            = millis();
     SwiMuxPresenceReport_t result = { 0, 0 };
-    SWI_DBGF("[_pollPresencePacket] entered.%s", "\r\n");
+    //SWI_DBGF("[_pollPresencePacket] entered.%s", "\r\n");
     do {
 
         int charVal = _sPort.read();
