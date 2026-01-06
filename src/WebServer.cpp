@@ -330,8 +330,8 @@ void WebServer::startAPIServer()
 void WebServer::_setupAPIRoutes()
 {
     // System Routes
-     _server.on("/api/status", HTTP_GET, std::bind(&WebServer::_handleGetStatus, this, std::placeholders::_1));
-   
+    _server.on("/api/status", HTTP_GET, std::bind(&WebServer::_handleGetStatus, this, std::placeholders::_1));
+
     _server.on("/api/system/info", HTTP_GET, std::bind(&WebServer::_handleGetSystemInfo, this, std::placeholders::_1));
     _server.on("/api/system/restart", HTTP_POST, std::bind(&WebServer::_handleRestart, this, std::placeholders::_1));
     _server.on("/api/system/factory-reset", HTTP_POST, std::bind(&WebServer::_handleFactoryReset, this, std::placeholders::_1));
@@ -444,7 +444,7 @@ void WebServer::_handleGetStatus(AsyncWebServerRequest* request)
         doc["state"]          = _deviceState.getStateString(); // String. Enum: "IDLE", "FEEDING", "ERROR", "CALIBRATING".
         doc["last_feed_time"] = _deviceState.lastFeedTime; // String. Time of the last successful feed (HH:MM format).
         doc["last_recipe"]    = _deviceState.lastRecipe.name; // String. Name of the recipe last used.
-        doc["error"] = _deviceState.lastError;
+        doc["error"]          = _deviceState.lastError;
         xSemaphoreGive(_mutex);
     } else {
         request->send(503, "application/json", "{\"error\":\"Could not acquire state lock\"}");
@@ -598,6 +598,7 @@ void WebServer::_handleGetTanks(AsyncWebServerRequest* request)
     JsonDocument doc;
     JsonArray tanksArray = doc.to<JsonArray>();
     if (xSemaphoreTake(_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+        ESP_LOGI(TAG, "_handleGetTanks: _deviceState.connectedTanks.size==%d", _deviceState.connectedTanks.size());
         for (const auto& tank : _deviceState.connectedTanks) {
             JsonObject tankObj         = tanksArray.add<JsonObject>();
             tankObj["uid"]             = tank.uid;
