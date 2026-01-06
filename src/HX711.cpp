@@ -104,7 +104,8 @@ long HX711::read()
 {
 
     // Wait for the chip to become ready.
-    wait_ready_timeout();
+    if (!wait_ready_timeout())
+        return 0;
 
     // Define structures for reading data into.
     unsigned long value = 0;
@@ -210,11 +211,17 @@ long HX711::read()
         return false;
     }
 
-    long HX711::read_average(uint8_t times)
+    long HX711::read_average(uint8_t times, uint8_t& failuresOut)
     {
-        long sum = 0;
+        long sum    = 0;
+        failuresOut = 0;
+        if (times == 0)
+            times = 10;
         for (uint8_t i = 0; i < times; i++) {
-            sum += read();
+            long value = read();
+            if (value == 0)
+                failuresOut++;
+            sum += value;
             // Probably will do no harm on AVR but will feed the Watchdog Timer (WDT) on ESP.
             // https://github.com/bogde/HX711/issues/73
             delay(0);
@@ -222,20 +229,23 @@ long HX711::read()
         return sum / times;
     }
 
-    double HX711::get_value(uint8_t times)
+    double HX711::get_value(uint8_t times, uint8_t& failuresOut)
     {
-        return read_average(times) - OFFSET;
+        return read_average(times, failuresOut) - OFFSET;
     }
 
-    float HX711::get_units(uint8_t times)
+    float HX711::get_units(uint8_t times, uint8_t& failuresOut)
     {
-        return get_value(times) / SCALE;
+        return get_value(times, failuresOut) / SCALE;
     }
 
-    void HX711::tare(uint8_t times)
+    bool HX711::tare(uint8_t times)
     {
-        double sum = read_average(times);
-        set_offset(sum);
+        uint8_t failures = 0;
+        double sum       = read_average(times, failures);
+        if (failures == 0)
+            set_offset(sum);
+        return failures == 0;
     }
 
     void HX711::set_scale(float scale)

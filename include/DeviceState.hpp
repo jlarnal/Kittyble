@@ -80,9 +80,10 @@ struct DeviceState {
     char formattedTime[20] = "TIME_NOT_SET";
 
     // Scale
-    float currentWeight  = 0.0;
-    long currentRawValue = 0;
-    bool isWeightStable  = false;
+    float currentWeight    = 0.0;
+    long currentRawValue   = 0;
+    bool isWeightStable    = false;
+    bool isScaleResponding = false;
 
     // Tanks
     std::vector<TankInfo> connectedTanks;

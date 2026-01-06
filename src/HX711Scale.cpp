@@ -30,11 +30,14 @@ void HX711Scale::tare()
 
     if (xSemaphoreTake(_scaleMutex, timeout) == pdTRUE) {
         ESP_LOGI(TAG, "Taring scale...");
-        _scale.tare(20);
-        _zeroOffset = _scale.get_offset();
-        xSemaphoreGive(_scaleMutex);
-        ESP_LOGI(TAG, "Tare complete. New offset: %ld", _zeroOffset);
-        saveCalibration();
+        if (_scale.tare(20)) {
+            _zeroOffset = _scale.get_offset();
+            xSemaphoreGive(_scaleMutex);
+            ESP_LOGI(TAG, "Tare complete. New offset: %ld", _zeroOffset);
+            saveCalibration();
+        } else {
+            ESP_LOGE(TAG, "Tare failed due to unresponsiveness of the HX711.");
+        }
     } else {
         ESP_LOGE(TAG, "Failed to acquire scale mutex for tare().");
     }
@@ -45,13 +48,15 @@ float HX711Scale::getWeight()
     float weight       = 0.0f;
     uint8_t samples    = _deviceState.Settings.getScaleSamplesCount() > 0 ? _deviceState.Settings.getScaleSamplesCount() : 1;
     TickType_t timeout = pdMS_TO_TICKS(samples * FAST_MODE_SAMPLING_PERIOD_MS + 50);
-
+    uint8_t failures   = 0;
     if (xSemaphoreTake(_scaleMutex, timeout) == pdTRUE) {
-        weight = _scale.get_units(samples);
+        weight = _scale.get_units(samples, failures);
         xSemaphoreGive(_scaleMutex);
     } else {
         ESP_LOGE(TAG, "Failed to acquire scale mutex for getWeight().");
     }
+    if (failures)
+        return NAN;
     return weight;
 }
 
@@ -60,13 +65,15 @@ long HX711Scale::getRawReading()
     long rawValue      = 0;
     uint8_t samples    = _deviceState.Settings.getScaleSamplesCount() > 0 ? _deviceState.Settings.getScaleSamplesCount() : 1;
     TickType_t timeout = pdMS_TO_TICKS(samples * FAST_MODE_SAMPLING_PERIOD_MS + 50);
-
+    uint8_t failures   = 0;
     if (xSemaphoreTake(_scaleMutex, timeout) == pdTRUE) {
-        rawValue = _scale.read_average(samples);
+        rawValue = _scale.read_average(samples, failures);
         xSemaphoreGive(_scaleMutex);
     } else {
         ESP_LOGE(TAG, "Failed to acquire scale mutex for getRawReading().");
     }
+    if (failures)
+        return 0;
     return rawValue;
 }
 
@@ -124,13 +131,14 @@ void HX711Scale::startTask()
 
 void HX711Scale::_scaleTask(void* pvParameters)
 {
-    constexpr uint32_t SCALE_SAMPLING_PERIOD_MS = 250;
+    constexpr uint32_t SCALE_SAMPLING_PERIOD_MS = 250; // 4Hz
     constexpr size_t SCALE_REPORTS_PERIOD       = 5000 / SCALE_SAMPLING_PERIOD_MS;
 
     HX711Scale* instance = (HX711Scale*)pvParameters;
-    ESP_LOGI(TAG, "Scale Task Started.");
+    ESP_LOGI(TAG, "Scale Task Started. Tare initiated.");
+    instance->tare();
 
-    const TickType_t sample_period_ms = pdMS_TO_TICKS(250); // 4Hz
+
 #if defined(PRINT_SCALE_STATUS)
     size_t reports = SCALE_REPORTS_PERIOD;
 #endif
@@ -138,19 +146,30 @@ void HX711Scale::_scaleTask(void* pvParameters)
         // These calls are now thread-safe due to the internal mutex.
         float current_weight = instance->getWeight();
         long raw_value       = instance->getRawReading();
-
-        // This mutex protects the global device state, which is a different resource.
         if (xSemaphoreTake(instance->_mutex, portMAX_DELAY) == pdTRUE) {
-            instance->_deviceState.isWeightStable  = (abs(current_weight - instance->_deviceState.currentWeight) < 0.5);
-            instance->_deviceState.currentWeight   = current_weight;
-            instance->_deviceState.currentRawValue = raw_value;
-            xSemaphoreGive(instance->_mutex);
+            if (isnanf(current_weight)) {
+                instance->_deviceState.isWeightStable    = false;
+                instance->_deviceState.isScaleResponding = false;
+            } else {
+                // This mutex protects the global device state, which is a different resource.
+
+                instance->_deviceState.isWeightStable    = (abs(current_weight - instance->_deviceState.currentWeight) < 0.5);
+                instance->_deviceState.currentWeight     = current_weight;
+                instance->_deviceState.currentRawValue   = raw_value;
+                instance->_deviceState.isScaleResponding = true;
+                xSemaphoreGive(instance->_mutex);
+            }
         }
+
 
 #if defined(PRINT_SCALE_STATUS) && !defined(LOG_TO_SPIFFS)
         if (!reports--) {
-            Serial.printf("Scale status: %s, %dg (%d)\r\n", (instance->_deviceState.isWeightStable ? "stable" : "unstable"),
-              instance->_deviceState.currentWeight, instance->_deviceState.currentRawValue);
+            if (instance->_deviceState.isScaleResponding != false) {
+                Serial.printf("Scale status: %s, %fg (%d)\r\n", (instance->_deviceState.isWeightStable ? "stable" : "unstable"),
+                  instance->_deviceState.currentWeight, instance->_deviceState.currentRawValue);
+            } else {
+                Serial.print("Scale status: UNRESPONSIVE !\r\n");
+            }
             reports = SCALE_REPORTS_PERIOD;
         }
 #endif
