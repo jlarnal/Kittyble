@@ -4,15 +4,11 @@
 static const char* TAG = "HX711Scale";
 
 HX711Scale::HX711Scale(DeviceState& deviceState, SemaphoreHandle_t& mutex, ConfigManager& configManager)
-    : _deviceState(deviceState), 
-      _mutex(mutex), 
-      _configManager(configManager), 
-      _scaleMutex(NULL),
-      _calibrationFactor(400.0f), 
-      _zeroOffset(0) 
+    : _deviceState(deviceState), _mutex(mutex), _configManager(configManager), _scaleMutex(NULL), _calibrationFactor(400.0f), _zeroOffset(0)
 {}
 
-bool HX711Scale::begin(uint8_t dataPin, uint8_t clockPin) {
+bool HX711Scale::begin(uint8_t dataPin, uint8_t clockPin)
+{
     _scaleMutex = xSemaphoreCreateMutex();
     if (_scaleMutex == NULL) {
         ESP_LOGE(TAG, "Fatal: Could not create scale mutex.");
@@ -27,13 +23,14 @@ bool HX711Scale::begin(uint8_t dataPin, uint8_t clockPin) {
     return true;
 }
 
-void HX711Scale::tare() {
+void HX711Scale::tare()
+{
     // Tare takes a fixed number of samples (20), so we can calculate a generous timeout.
     TickType_t timeout = pdMS_TO_TICKS(20 * FAST_MODE_SAMPLING_PERIOD_MS + 100);
 
     if (xSemaphoreTake(_scaleMutex, timeout) == pdTRUE) {
         ESP_LOGI(TAG, "Taring scale...");
-        _scale.tare(20); 
+        _scale.tare(20);
         _zeroOffset = _scale.get_offset();
         xSemaphoreGive(_scaleMutex);
         ESP_LOGI(TAG, "Tare complete. New offset: %ld", _zeroOffset);
@@ -43,9 +40,10 @@ void HX711Scale::tare() {
     }
 }
 
-float HX711Scale::getWeight() {
-    float weight = 0.0f;
-    uint8_t samples = _deviceState.Settings.getScaleSamplesCount() > 0 ? _deviceState.Settings.getScaleSamplesCount() : 1;
+float HX711Scale::getWeight()
+{
+    float weight       = 0.0f;
+    uint8_t samples    = _deviceState.Settings.getScaleSamplesCount() > 0 ? _deviceState.Settings.getScaleSamplesCount() : 1;
     TickType_t timeout = pdMS_TO_TICKS(samples * FAST_MODE_SAMPLING_PERIOD_MS + 50);
 
     if (xSemaphoreTake(_scaleMutex, timeout) == pdTRUE) {
@@ -57,9 +55,10 @@ float HX711Scale::getWeight() {
     return weight;
 }
 
-long HX711Scale::getRawReading() {
-    long rawValue = 0;
-    uint8_t samples = _deviceState.Settings.getScaleSamplesCount() > 0 ? _deviceState.Settings.getScaleSamplesCount() : 1;
+long HX711Scale::getRawReading()
+{
+    long rawValue      = 0;
+    uint8_t samples    = _deviceState.Settings.getScaleSamplesCount() > 0 ? _deviceState.Settings.getScaleSamplesCount() : 1;
     TickType_t timeout = pdMS_TO_TICKS(samples * FAST_MODE_SAMPLING_PERIOD_MS + 50);
 
     if (xSemaphoreTake(_scaleMutex, timeout) == pdTRUE) {
@@ -71,24 +70,26 @@ long HX711Scale::getRawReading() {
     return rawValue;
 }
 
-float HX711Scale::calibrateWithKnownWeight(float knownWeight) {
+float HX711Scale::calibrateWithKnownWeight(float knownWeight)
+{
     if (knownWeight <= 0) {
         ESP_LOGE(TAG, "Calibration failed: Known weight must be positive.");
         return _calibrationFactor;
     }
     // getRawReading() is already thread-safe.
-    long reading = getRawReading(); 
-    
+    long reading = getRawReading();
+
     // setCalibrationFactor() is also thread-safe.
     float new_factor = (float)(reading - _zeroOffset) / knownWeight;
     setCalibrationFactor(new_factor);
-    
+
     saveCalibration();
     ESP_LOGI(TAG, "Scale calibrated with new factor: %.4f", new_factor);
     return new_factor;
 }
 
-void HX711Scale::setCalibrationFactor(float factor) {
+void HX711Scale::setCalibrationFactor(float factor)
+{
     // This requires a very short lock as it's a quick operation.
     if (xSemaphoreTake(_scaleMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
         _calibrationFactor = factor;
@@ -100,50 +101,60 @@ void HX711Scale::setCalibrationFactor(float factor) {
     }
 }
 
-float HX711Scale::getCalibrationFactor() {
+float HX711Scale::getCalibrationFactor()
+{
     return _calibrationFactor;
 }
 
-long HX711Scale::getZeroOffset() {
+long HX711Scale::getZeroOffset()
+{
     return _zeroOffset;
 }
 
-void HX711Scale::saveCalibration() {
+void HX711Scale::saveCalibration()
+{
     _configManager.saveScaleCalibration(_calibrationFactor, _zeroOffset);
     ESP_LOGI(TAG, "Scale calibration saved to NVS.");
 }
 
-void HX711Scale::startTask() {
-    xTaskCreate(
-        _scaleTask,
-        "Scale Task",
-        4096,
-        this,
-        5,
-        NULL
-    );
+void HX711Scale::startTask()
+{
+    xTaskCreate(_scaleTask, "Scale Task", 4096, this, 5, NULL);
 }
 
-void HX711Scale::_scaleTask(void *pvParameters) {
+void HX711Scale::_scaleTask(void* pvParameters)
+{
+    constexpr uint32_t SCALE_SAMPLING_PERIOD_MS = 250;
+    constexpr size_t SCALE_REPORTS_PERIOD       = 5000 / SCALE_SAMPLING_PERIOD_MS;
+
     HX711Scale* instance = (HX711Scale*)pvParameters;
     ESP_LOGI(TAG, "Scale Task Started.");
-    
-    TickType_t lastWakeTime = xTaskGetTickCount();
-    const TickType_t frequency = pdMS_TO_TICKS(250); // 4Hz
 
+    const TickType_t sample_period_ms = pdMS_TO_TICKS(250); // 4Hz
+#if defined(PRINT_SCALE_STATUS)
+    size_t reports = SCALE_REPORTS_PERIOD;
+#endif
     for (;;) {
         // These calls are now thread-safe due to the internal mutex.
         float current_weight = instance->getWeight();
-        long raw_value = instance->getRawReading();
-        
+        long raw_value       = instance->getRawReading();
+
         // This mutex protects the global device state, which is a different resource.
         if (xSemaphoreTake(instance->_mutex, portMAX_DELAY) == pdTRUE) {
-            instance->_deviceState.isWeightStable = (abs(current_weight - instance->_deviceState.currentWeight) < 0.5);
-            instance->_deviceState.currentWeight = current_weight;
+            instance->_deviceState.isWeightStable  = (abs(current_weight - instance->_deviceState.currentWeight) < 0.5);
+            instance->_deviceState.currentWeight   = current_weight;
             instance->_deviceState.currentRawValue = raw_value;
             xSemaphoreGive(instance->_mutex);
         }
-        
-        vTaskDelayUntil(&lastWakeTime, frequency);
+
+#if defined(PRINT_SCALE_STATUS) && !defined(LOG_TO_SPIFFS)
+        if (!reports--) {
+            Serial.printf("Scale status: %s, %dg (%d)\r\n", (instance->_deviceState.isWeightStable ? "stable" : "unstable"),
+              instance->_deviceState.currentWeight, instance->_deviceState.currentRawValue);
+            reports = SCALE_REPORTS_PERIOD;
+        }
+#endif
+
+        vTaskDelay(pdMS_TO_TICKS(SCALE_SAMPLING_PERIOD_MS));
     }
 }

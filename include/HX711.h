@@ -44,10 +44,8 @@ class HX711
 		// input PD_SCK should be low. When DOUT goes to low, it indicates data is ready for retrieval.
 		bool is_ready();
 
-		// Wait for the HX711 to become ready
-		void wait_ready(unsigned long delay_ms = 0);
-		bool wait_ready_retry(int retries = 3, unsigned long delay_ms = 0);
-		bool wait_ready_timeout(unsigned long timeout = 1000, unsigned long delay_ms = 0);
+		// Wait for the HX711 to become ready		
+		bool wait_ready_timeout(unsigned long timeout = 1000, unsigned long delay_ms = 125, uint8_t retries=3);
 
 		// set the gain factor; takes effect only after a call to read()
 		// channel A can be set for a 128 or 64 gain; channel B has a fixed 32 gain

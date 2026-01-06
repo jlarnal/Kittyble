@@ -191,10 +191,12 @@ void battAndOTA_Task(void* pvParameters)
     for (;;) {
         pBatt->refreshAverage();
         pBatt->getAverages(&voltage, &globalDeviceState.batteryLevel);
+#if defined(PRINT_BATT_STATUS) && !defined(LOG_TO_SPIFFS)
         if (!reports--) {
             Serial.printf("Battery status: %dmV, %d%%\r\n", voltage, globalDeviceState.batteryLevel);
             reports = REPORTS_PERIOD;
         }
+#endif
         vTaskDelay(pdMS_TO_TICKS(BATTERY_SAMPLING_PERIOD_MS));
     }
 }
