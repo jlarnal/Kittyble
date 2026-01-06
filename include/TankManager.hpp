@@ -22,22 +22,26 @@ struct DeviceState;
 #define DEFAULT_HOPPER_OPEN_PWM   2000
 
 
-/** @brief Data structure for the tank's EEPROM, and UID. */
-struct __attribute__((packed)) TankEEpromData_t {
-    // Data Section (96 bytes)
-    struct __attribute__((packed)) _EE_RECORD_DATA_ {
-        struct __attribute__((packed)) {
-            uint8_t lastBaseMAC48[6]; // Last MAC48 of the KibbleT5 base this device was connected to.
-            uint8_t lastBusIndex; // Last bus index this device was connected to.
-        } history;
-        uint8_t nameLength; // The length of the string stored in the `name` field.
-        uint16_t capacity; // Capacity, in liters, as an unsigned Q3.13 number.
-        uint16_t density; // A Q2.14 unsigned fixed number for kibble density in kg/L.
-        uint16_t servoIdlePwm; // The PWM value (in microseconds) for the servo's idle position.
-        uint16_t remainingGrams; // Remaining kibble in grams.
-        char name[80]; // The name of the tank. In UTF-8 hopefully ? (96 - 16 header bytes = 80)
-    } data;
+/** @brief Internal record structure for Tank EEPROM */
+struct __attribute__((packed)) TankHistory_t {
+    uint8_t lastBaseMAC48[6];
+    uint8_t lastBusIndex;
+};
 
+/** @brief Main data section of the Tank EEPROM */
+struct __attribute__((packed)) TankEEpromRecordData_t {
+    TankHistory_t history;
+    uint8_t nameLength;
+    uint16_t capacity;
+    uint16_t density;
+    uint16_t servoIdlePwm;
+    uint16_t remainingGrams;
+    char name[80];
+};
+
+/** @brief Complete data structure including ECC */
+struct __attribute__((packed)) TankEEpromData_t {
+    TankEEpromRecordData_t data;
     // ECC Section (32 bytes)
     uint8_t ecc[32];
 

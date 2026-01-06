@@ -557,7 +557,7 @@ static void testReedSolomon()
     TankEEpromData_t* pEepromOriginal  = new TankEEpromData_t();
     TankEEpromData_t* pEepromCorrupted = new TankEEpromData_t();
     TankEEpromData_t::format(*pEepromOriginal);
-    TankEEpromData_t::_EE_RECORD_DATA_* pInputData = (TankEEpromData_t::_EE_RECORD_DATA_*)malloc(TankEEpromData_t::DATA_SIZE);
+    TankEEpromRecordData_t* pInputData = (TankEEpromRecordData_t*)malloc(TankEEpromData_t::DATA_SIZE);
     if (pRS == nullptr || pEepromOriginal == nullptr || pInputData == nullptr) {
         ESP_LOGE(TAG, "Could not allocate resources for this test.\r\n");
         goto EndOftestReedSolomon;

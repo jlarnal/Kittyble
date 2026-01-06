@@ -92,7 +92,7 @@ void TankEEpromData_t::format(TankEEpromData_t& eedata)
     eedata.data.history.lastBusIndex = 0xFF; // No history
     const char* defaultName          = "New Tank";
     eedata.data.nameLength           = (uint8_t)strlen(defaultName) + 1; // Include null terminator
-    strncpy(eedata.data.name, defaultName, sizeof(TankEEpromData_t::_EE_RECORD_DATA_::name) - 1);
+    strncpy(eedata.data.name, defaultName, TankEEpromData_t::NAME_FIELD_SIZE - 1);
 
     eedata.data.capacity       = 0;
     eedata.data.density        = 0;
@@ -116,7 +116,7 @@ bool TankEEpromData_t::sanitize(TankEEpromData_t& eedata)
     bool structuralIntegrity = true;
 
     // Check ranges that would indicate corruption or fresh flash (0xFF)
-    if (eedata.data.nameLength > sizeof(TankEEpromData_t::_EE_RECORD_DATA_::name)) {
+    if (eedata.data.nameLength > TankEEpromData_t::NAME_FIELD_SIZE) {
         structuralIntegrity = false;
     }
 
@@ -221,10 +221,10 @@ bool TankInfo::fillFromEeprom(TankEEpromData_t& eeprom)
 
     name.clear();
     // Safety clamp on name length
-    uint8_t safeLen = std::min(eeprom.data.nameLength, (uint8_t)sizeof(TankEEpromData_t::_EE_RECORD_DATA_::name));
+    uint8_t safeLen = std::min(eeprom.data.nameLength, (uint8_t)TankEEpromData_t::NAME_FIELD_SIZE);
     if (safeLen > 0) {
         // Ensure null termination for string construction
-        char tempName[sizeof(TankEEpromData_t::_EE_RECORD_DATA_::name) + 1];
+        char tempName[TankEEpromData_t::NAME_FIELD_SIZE + 1];
         memcpy(tempName, eeprom.data.name, safeLen);
         tempName[safeLen] = '\0';
         name              = std::string(tempName);
@@ -250,10 +250,10 @@ TankInfo::TankInfoDiscrepancies_e TankInfo::toTankData(TankEEpromData_t& eeprom)
 {
     uint32_t result = TID_NONE;
     // name
-    if (name.compare(0, sizeof(TankEEpromData_t::_EE_RECORD_DATA_::name), (char*)&eeprom.data.name[0]) != 0) {
+    if (name.compare(0, TankEEpromData_t::NAME_FIELD_SIZE, (char*)&eeprom.data.name[0]) != 0) {
         result |= TID_NAME_CHANGED;
         // Copy the length-capped name string.
-        eeprom.data.nameLength = std::min(name.length(), (size_t)sizeof(TankEEpromData_t::_EE_RECORD_DATA_::name));
+        eeprom.data.nameLength = std::min(name.length(), TankEEpromData_t::NAME_FIELD_SIZE);
         strncpy((char*)&eeprom.data.name[0], name.c_str(), (size_t)eeprom.data.nameLength - 1);
     }
     // bus index
