@@ -598,8 +598,8 @@ void WebServer::_handleGetTanks(AsyncWebServerRequest* request)
     JsonDocument doc;
     JsonArray tanksArray = doc.to<JsonArray>();
     if (xSemaphoreTake(_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
-        ESP_LOGI(TAG, "_handleGetTanks: _deviceState.connectedTanks.size==%d", _deviceState.connectedTanks.size());
-        for (const auto& tank : _deviceState.connectedTanks) {
+       ESP_LOGI(TAG, "_handleGetTanks: _deviceState.connectedTanks.size==%d", _deviceState.connectedTanks.size());
+     for (const auto& tank : _deviceState.connectedTanks) {
             JsonObject tankObj         = tanksArray.add<JsonObject>();
             tankObj["uid"]             = tank.uid;
             tankObj["name"]            = tank.name;

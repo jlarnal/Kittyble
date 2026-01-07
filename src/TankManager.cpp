@@ -415,6 +415,14 @@ void TankManager::refresh(uint16_t refreshMap)
         _knownTanks.erase(newEnd, _knownTanks.end());
     }
 
+    // Update the global state so other modules (WebServer, etc.) see the changes
+    if (xSemaphoreTake(_deviceStateMutex, MUTEX_ACQUISITION_TIMEOUT) == pdTRUE) {
+        _deviceState.connectedTanks = _knownTanks;
+        xSemaphoreGive(_deviceStateMutex);
+    } else {
+        ESP_LOGE(TAG, "Failed to acquire DeviceState mutex to update connected tanks!");
+    }
+
     xSemaphoreGiveRecursive(_swimuxMutex);
 }
 
@@ -562,12 +570,43 @@ bool TankManager::commitTankInfo(const TankInfo& tankInfo)
     TankInfo::TankInfoDiscrepancies_e updatesNeeded = mutableTankInfo.toTankData(currentEepromData);
 
     // 4. If there are changes, write them back using our optimized method.
-    if (updatesNeeded != TankInfo::TID_NONE) {
+   if (updatesNeeded != TankInfo::TID_NONE) {
         ESP_LOGI(TAG, "Committing changes (flags: 0x%X) to tank 0x%016llX on bus %d", (uint32_t)updatesNeeded, tankInfo.uid, busIndex);
-        updateEeprom(currentEepromData, updatesNeeded, busIndex);
+        
+        // Check if write was successful
+        if (updateEeprom(currentEepromData, updatesNeeded, busIndex)) {
+            
+            // 1. Update the local cache (_knownTanks)
+            for (auto& t : _knownTanks) {
+                if (t.uid == tankInfo.uid) {
+                    // Update the cached object with the new data
+                    // We preserve the isFullInfo flag and ensure busIndex is correct
+                    bool wasFull = t.isFullInfo;
+                    t = tankInfo; 
+                    t.busIndex = busIndex;
+                    t.isFullInfo = wasFull; 
+                    break;
+                }
+            }
+
+            // 2. Update the Global State (so the UI sees the new name immediately)
+            if (xSemaphoreTake(_deviceStateMutex, MUTEX_ACQUISITION_TIMEOUT) == pdTRUE) {
+                for (auto& t : _deviceState.connectedTanks) {
+                    if (t.uid == tankInfo.uid) {
+                        bool wasFull = t.isFullInfo;
+                        t = tankInfo;
+                        t.busIndex = busIndex;
+                        t.isFullInfo = wasFull;
+                        break;
+                    }
+                }
+                xSemaphoreGive(_deviceStateMutex);
+            }
+        }
     } else {
         ESP_LOGI(TAG, "No changes to commit for tank 0x%016llX", tankInfo.uid);
     }
+
 
     xSemaphoreGiveRecursive(_swimuxMutex);
     return true;
@@ -647,6 +686,17 @@ bool TankManager::updateRemaingKibble(const uint64_t uid, uint16_t newRemainingG
     }
     if (!foundInCache) {
         ESP_LOGW(TAG, "updateRemaingKibble: Tank 0x%016llX found on bus but not in cache.", uid);
+    }
+
+    // Sync this specific change to global state
+    if (xSemaphoreTake(_deviceStateMutex, MUTEX_ACQUISITION_TIMEOUT) == pdTRUE) {
+        for (auto& t : _deviceState.connectedTanks) {
+            if (t.uid == uid) {
+                t.remaining_weight_kg = (double)newRemainingGrams / 1000.0;
+                break;
+            }
+        }
+        xSemaphoreGive(_deviceStateMutex);
     }
 
     // --- Safe path: full read/modify/finalize/write ---

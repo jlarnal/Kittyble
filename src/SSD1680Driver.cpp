@@ -30,10 +30,10 @@ static const uint8_t ssd1680_custom_init_code[] {
         // First phase is a 50% square oscillation between VSH and VSL, repeated 25 time
         // then 80 frames of the final polarity (U/VSH for black, D/VSL for white) without repetition
         // The whole sequence is only done once.        
-        1   , 1   , 24  , 24  , 0   , 0   , 0   , // Group #0 timing 
-        1   , 1   , 24  , 24  , 0   , 0   , 0   , // Group #1 timing 
-        1   , 1   , 24  , 24  , 0   , 0   , 0   , // Group #2 timing 
-        1   , 1   , 24  , 24  , 0   , 0   , 0   , // Group #3 timing 
+        1   , 1   , 15  , 1   , 1   , 15   , 0   , // Group #0 timing 
+        1   , 1   , 15  , 1   , 1   , 15   , 0   , // Group #1 timing 
+        1   , 1   , 15  , 1   , 1   , 15   , 0   , // Group #2 timing 
+        1   , 1   , 15  , 1   , 1   , 15   , 0   , // Group #3 timing 
         0   , 0   , 0   , 0   , 0   , 0   , 0   , // Group #4 timing 
         0   , 0   , 0   , 0   , 0   , 0   , 0   , // Group #5 timing  
         0   , 0   , 0   , 0   , 0   , 0   , 0   , // Group #6 timing  
@@ -42,7 +42,7 @@ static const uint8_t ssd1680_custom_init_code[] {
         0   , 0   , 0   , 0   , 0   , 0   , 0   , // Group #9 timing  
         0   , 0   , 0   , 0   , 0   , 0   , 0   , // Group #10 timing  
         0   , 0   , 0   , 0   , 0   , 0   , 0   , // Group #11 timing 
-        0x32, 0x00, 0x00, 0x00, 0x00, 0x00, // FR[n]
+        0x44, 0x44, 0x77, 0x77, 0x77, 0x77, // FR[n]
         0    , 0    , 0    , // XON[n]
     #endif
   
@@ -111,7 +111,8 @@ void Ssd1680_Driver::update()
     EPD_command(SSD1680_MASTER_ACTIVATE);
     busy_wait();
 
-    if (_busy_pin <= -1) {
+    if(_busy_pin <= -1) {
+        ESP_LOGI("SSD1680", "No busy pin defined, waiting for 1s.");
         delay(1000);
     }
 }

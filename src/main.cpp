@@ -112,7 +112,6 @@ void setup()
     configManager.begin();
     display.begin();
     display.showBootScreen();
-    vTaskDelay(pdMS_TO_TICKS(2000));
 
     // Initialize hardware before running tests
     uint16_t hopper_closed, hopper_open;
