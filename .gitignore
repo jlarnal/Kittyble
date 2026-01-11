@@ -3,7 +3,13 @@
 .vscode/c_cpp_properties.json
 .vscode/launch.json
 .vscode/ipch
+data
+gfx
+build
+test
 old_nvs_dump.bin
 mkspiffs.exe
 latest_part.bin
 kibblet5.puml
+spiff_part.bin
+

@@ -156,7 +156,8 @@ void setup()
 
 void loop()
 {
-
+    if (uxTaskPriorityGet(NULL) != 1)
+        vTaskPrioritySet(NULL, 1);
 #ifdef LOG_TO_SPIFFS
     static uint32_t elapsed = 0U, loopCount = 0U;
     if ((millis() - elapsed) > 500) {
@@ -166,7 +167,45 @@ void loop()
         loopCount++;
     }
     vTaskDelay(50);
+#else
+    if (Serial.available()) {
+        int charVal = Serial.read();
+        switch (charVal) {
+            case 's':
+            case 'S':
+                if (xSemaphoreTakeRecursive(xDeviceStateMutex, 500)) {
+                    DeviceState::printTo(globalDeviceState, Serial);
+                    xSemaphoreGiveRecursive(xDeviceStateMutex);
+                } else {
+                    ESP_LOGE(TAG, "Could not take mutex to print state!");
+                }
+                break;
+            case 'm':
+            case 'M':
+#ifndef configUSE_TRACE_FACILITY
+                ESP_LOGW(TAG, "configUSE_TRACE_FACILITY is not enabled in FreeRTOSConfig.h, cannot get task info.");
+#else
+                {
+                    TaskHandle_t mutexHolder = xSemaphoreGetMutexHolder(xDeviceStateMutex);
+                    if (mutexHolder != NULL) {
+                        TaskStatus_t taskInfo;
+                        memset(&taskInfo, 0, sizeof(TaskStatus_t));
+                        vTaskGetTaskInfo(mutexHolder, &taskInfo, pdFALSE, eInvalid);
+                        Serial.printf("xDeviceStateMutex is held by task: %s (Handle: %p), status:%d\r\n", taskInfo.pcTaskName,
+                          (void*)taskInfo.xHandle, taskInfo.eCurrentState);
+                    } else {
+                        Serial.println("xDeviceStateMutex is not held by any task.");
+                    }
+                }
 #endif
+            default:
+                break;
+        }
+    }
+    vTaskDelay(pdMS_TO_TICKS(100));
+#endif
+
+
     //   vTaskDelete(NULL);
 }
 

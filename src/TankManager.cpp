@@ -6,6 +6,7 @@
 #include <cstring>
 #include <cmath>
 #include <cstddef> // Required for offsetof
+#include <esp_mac.h>
 #include "ReedSolomon.hpp"
 
 static const char* TAG = "TankManager";
@@ -220,7 +221,7 @@ bool TankInfo::fillFromEeprom(TankEEpromData_t& eeprom)
     // TankManager::refresh guarantees this by calling format() if sanitize() fails.
 
     name.clear();
-    // Safety clamp on name length
+    // Safety clamp on name length (nameLength includes the null terminator)
     uint8_t safeLen = std::min(eeprom.data.nameLength, (uint8_t)TankEEpromData_t::NAME_FIELD_SIZE);
     if (safeLen > 0) {
         // Ensure null termination for string construction
@@ -253,8 +254,10 @@ TankInfo::TankInfoDiscrepancies_e TankInfo::toTankData(TankEEpromData_t& eeprom)
     if (name.compare(0, TankEEpromData_t::NAME_FIELD_SIZE, (char*)&eeprom.data.name[0]) != 0) {
         result |= TID_NAME_CHANGED;
         // Copy the length-capped name string.
-        eeprom.data.nameLength = std::min(name.length(), TankEEpromData_t::NAME_FIELD_SIZE);
-        strncpy((char*)&eeprom.data.name[0], name.c_str(), (size_t)eeprom.data.nameLength - 1);
+        size_t maxCopy = std::min(name.length(), (size_t)(TankEEpromData_t::NAME_FIELD_SIZE - 1));
+        strncpy((char*)&eeprom.data.name[0], name.c_str(), maxCopy);
+        eeprom.data.name[maxCopy] = '\0'; // Ensure null termination
+        eeprom.data.nameLength    = maxCopy + 1; // Include null terminator in length
     }
     // bus index
     if (busIndex != eeprom.data.history.lastBusIndex) {
@@ -546,6 +549,8 @@ bool TankManager::commitTankInfo(const TankInfo& tankInfo)
         return false;
     }
 
+
+
     // 1. Find the bus where the tank is currently connected.
     int8_t busIndex = getBusOfTank(tankInfo.uid);
     if (busIndex < 0) {
@@ -553,6 +558,8 @@ bool TankManager::commitTankInfo(const TankInfo& tankInfo)
         xSemaphoreGiveRecursive(_swimuxMutex);
         return false;
     }
+
+
 
     // 2. Read the current data from the EEPROM to establish a baseline.
     TankEEpromData_t currentEepromData;
@@ -563,28 +570,34 @@ bool TankManager::commitTankInfo(const TankInfo& tankInfo)
         return false;
     }
 
+
     // 3. Create a mutable copy to call toTankData, which modifies the eeprom struct
     // and returns flags indicating what has changed.
-    TankInfo mutableTankInfo                        = tankInfo;
-    mutableTankInfo.busIndex                        = busIndex; // Ensure the busIndex is up-to-date for comparison.
-    TankInfo::TankInfoDiscrepancies_e updatesNeeded = mutableTankInfo.toTankData(currentEepromData);
+    TankInfo mutableTankInfo                      = tankInfo;
+    mutableTankInfo.busIndex                      = busIndex; // Ensure the busIndex is up-to-date for comparison.
+    TankInfo::TankInfoDiscrepancies_e changesMade = mutableTankInfo.toTankData(currentEepromData);
 
     // 4. If there are changes, write them back using our optimized method.
-   if (updatesNeeded != TankInfo::TID_NONE) {
-        ESP_LOGI(TAG, "Committing changes (flags: 0x%X) to tank 0x%016llX on bus %d", (uint32_t)updatesNeeded, tankInfo.uid, busIndex);
-        
+    if (changesMade != TankInfo::TID_NONE) {
+        ESP_LOGI(TAG, "Committing changes (flags: 0x%X) to tank 0x%016llX on bus %d", (uint32_t)changesMade, tankInfo.uid, busIndex);
+        // Copy this ESP32 6 lower bytes of MAC48 into the tankInfo struct for future reference.
+        { // inside a scope for baseMac, let's not consume more stack than needed
+            uint8_t baseMac[6];
+            esp_efuse_mac_get_default(baseMac);
+            memcpy(mutableTankInfo.lastBaseMAC48, baseMac, 6);
+        }
         // Check if write was successful
-        if (updateEeprom(currentEepromData, updatesNeeded, busIndex)) {
-            
+        if (updateEeprom(currentEepromData, changesMade, busIndex)) {
+
             // 1. Update the local cache (_knownTanks)
             for (auto& t : _knownTanks) {
                 if (t.uid == tankInfo.uid) {
                     // Update the cached object with the new data
                     // We preserve the isFullInfo flag and ensure busIndex is correct
                     bool wasFull = t.isFullInfo;
-                    t = tankInfo; 
-                    t.busIndex = busIndex;
-                    t.isFullInfo = wasFull; 
+                    t            = tankInfo;
+                    t.busIndex   = busIndex;
+                    t.isFullInfo = wasFull;
                     break;
                 }
             }
@@ -594,8 +607,8 @@ bool TankManager::commitTankInfo(const TankInfo& tankInfo)
                 for (auto& t : _deviceState.connectedTanks) {
                     if (t.uid == tankInfo.uid) {
                         bool wasFull = t.isFullInfo;
-                        t = tankInfo;
-                        t.busIndex = busIndex;
+                        t            = tankInfo;
+                        t.busIndex   = busIndex;
                         t.isFullInfo = wasFull;
                         break;
                     }

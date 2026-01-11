@@ -61,45 +61,23 @@ const char* captivePortalHtml_Part2 = R"rawliteral(
 )rawliteral";
 
 
-static uint64_t strToU64(String str, size_t base = 10)
+static uint64_t hexStrToU64(const String& str)
 {
-    if (base < 2 || base > 36)
-        return 0; // invalid base
-
     uint64_t result = 0;
-    bool neg        = false;
-    size_t i        = 0;
-
-    // Trim leading spaces
-    while (i < str.length() && isspace(str[i]))
-        i++;
-
-    // Handle sign
-    if (i < str.length() && (str[i] == '-' || str[i] == '+')) {
-        neg = (str[i] == '-');
-        i++;
-    }
-
-    for (; i < str.length(); i++) {
+    for (size_t i = 0; i < str.length() && i < 16; i++) {
         char c = str[i];
         uint8_t digit;
-
         if (c >= '0' && c <= '9')
             digit = c - '0';
-        else if (c >= 'A' && c <= 'Z')
+        else if (c >= 'A' && c <= 'F')
             digit = c - 'A' + 10;
-        else if (c >= 'a' && c <= 'z')
+        else if (c >= 'a' && c <= 'f')
             digit = c - 'a' + 10;
         else
-            break; // invalid char
-
-        if (digit >= base)
-            break; // digit not valid for base
-
-        result = result * base + digit;
+            break;
+        result = (result << 4) | digit;
     }
-
-    return neg ? (uint64_t)(-(int64_t)result) : result;
+    return result;
 }
 
 
@@ -352,15 +330,15 @@ void WebServer::_setupAPIRoutes()
     // Tank Routes
     _server.on("/api/tanks", HTTP_GET, std::bind(&WebServer::_handleGetTanks, this, std::placeholders::_1));
     _server.on(
-      "^/api/tanks/([0-9A-Fa-f]{16})$", HTTP_PUT, [this](AsyncWebServerRequest* r) {}, NULL,
+      "^/api/tanks/([0-9A-Fa-f]+)$", HTTP_PUT, [this](AsyncWebServerRequest* r) {}, NULL,
       [this](AsyncWebServerRequest* r, uint8_t* d, size_t l, size_t i, size_t t) {
           _handleBody(r, d, l, i, t, [this](AsyncWebServerRequest* req, JsonDocument& doc) { this->_handleUpdateTank(req, doc); });
       });
-    _server.on("^/api/tanks/([0-9A-Fa-f]{16})/history$", HTTP_GET, std::bind(&WebServer::_handleGetTankHistory, this, std::placeholders::_1));
+    _server.on("^/api/tanks/([0-9A-Fa-f]+)/history$", HTTP_GET, std::bind(&WebServer::_handleGetTankHistory, this, std::placeholders::_1));
 
     // Feeding Routes
     _server.on(
-      "^/api/feed/immediate/([0-9A-Fa-f]{16})$", HTTP_POST, [this](AsyncWebServerRequest* r) {}, NULL,
+      "^/api/feed/immediate/([0-9A-Fa-f]+)$", HTTP_POST, [this](AsyncWebServerRequest* r) {}, NULL,
       [this](AsyncWebServerRequest* r, uint8_t* d, size_t l, size_t i, size_t t) {
           _handleBody(r, d, l, i, t, [this](AsyncWebServerRequest* req, JsonDocument& doc) { this->_handleFeedImmediate(req, doc); });
       });
@@ -568,8 +546,10 @@ void WebServer::_handleExportSettings(AsyncWebServerRequest* request)
     JsonArray tanks = doc["tanks"].to<JsonArray>();
     if (xSemaphoreTake(_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
         for (const auto& tank : _deviceState.connectedTanks) {
-            JsonObject tankObj       = tanks.add<JsonObject>();
-            tankObj["uid"]           = tank.uid;
+            JsonObject tankObj = tanks.add<JsonObject>();
+            char hexUid[17];
+            snprintf(hexUid, sizeof(hexUid), "%llX", (unsigned long long)tank.uid);
+            tankObj["uid"]           = hexUid;
             tankObj["name"]          = tank.name;
             tankObj["w_capacity_kg"] = tank.w_capacity_kg;
         }
@@ -598,17 +578,20 @@ void WebServer::_handleGetTanks(AsyncWebServerRequest* request)
     JsonDocument doc;
     JsonArray tanksArray = doc.to<JsonArray>();
     if (xSemaphoreTake(_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
-       ESP_LOGI(TAG, "_handleGetTanks: _deviceState.connectedTanks.size==%d", _deviceState.connectedTanks.size());
-     for (const auto& tank : _deviceState.connectedTanks) {
-            JsonObject tankObj         = tanksArray.add<JsonObject>();
-            tankObj["uid"]             = tank.uid;
+        ESP_LOGI(TAG, "_handleGetTanks: _deviceState.connectedTanks.size==%d", _deviceState.connectedTanks.size());
+        for (const auto& tank : _deviceState.connectedTanks) {
+            JsonObject tankObj = tanksArray.add<JsonObject>();
+            char hexUid[17];
+            snprintf(hexUid, sizeof(hexUid), "%llX", (unsigned long long)tank.uid);
+            tankObj["uid"]             = hexUid;
             tankObj["name"]            = tank.name;
             tankObj["busIndex"]        = tank.busIndex;
             tankObj["wcapacity"]       = tank.w_capacity_kg * 1000;
             tankObj["remainingWeight"] = tank.remaining_weight_kg * 1000;
-
-            JsonObject calib = tankObj["calibration"].to<JsonObject>();
-            calib["idlePwm"] = tank.servoIdlePwm;
+            tankObj["capacity"]        = tank.capacityLiters;
+            tankObj["density"]         = tank.kibbleDensity;
+            JsonObject calib           = tankObj["calibration"].to<JsonObject>();
+            calib["idlePwm"]           = tank.servoIdlePwm;
 
             tankObj["lastDispensed"]  = 0;
             tankObj["totalDispensed"] = 0;
@@ -628,11 +611,12 @@ void WebServer::_handleUpdateTank(AsyncWebServerRequest* request, JsonDocument& 
 {
     // 1. Extract UID from the path and perform basic validation.
     String uidStr = request->pathArg(0);
+    ESP_LOGI(TAG, "_handleUpdateTank invoked for %s", uidStr.c_str());
     if (uidStr.isEmpty()) {
         request->send(400, "application/json", "{\"error\":\"Missing tank UID in request path\"}");
         return;
     }
-    uint64_t uid = strToU64(uidStr, 16); // UID is hexadecimal
+    uint64_t uid = hexStrToU64(uidStr);
 
     // 2. Create a TankInfo object to hold the new data.
     // We must first read the existing data to have a complete object to modify.
@@ -655,10 +639,12 @@ void WebServer::_handleUpdateTank(AsyncWebServerRequest* request, JsonDocument& 
         // Therefore, we must multiply by 1000.
         tankToUpdate.remaining_weight_kg = doc["remainingWeight"].as<double>() * 1000.0;
     }
-    if (!doc["capacityLiters"].isNull()) {
-        tankToUpdate.capacityLiters = doc["capacityLiters"].as<double>();
+    if (!doc["capacity"].isNull()) {
+        tankToUpdate.capacityLiters = doc["capacity"].as<double>();
     }
-    if (!doc["kibbleDensity"].isNull()) {
+    if (!doc["density"].isNull()) {
+        tankToUpdate.kibbleDensity = doc["density"].as<double>();
+    } else if (!doc["kibbleDensity"].isNull()) {
         tankToUpdate.kibbleDensity = doc["kibbleDensity"].as<double>();
     }
 
@@ -670,9 +656,15 @@ void WebServer::_handleUpdateTank(AsyncWebServerRequest* request, JsonDocument& 
         }
     }
 
+
+
     // 4. Commit the changes using the full-featured TankManager method.
     if (_tankManager.commitTankInfo(tankToUpdate)) {
         request->send(200, "application/json", "{\"success\":true}");
+        // Print updated tank info for debugging using ESP_LOGI
+        ESP_LOGI(TAG, "Tank %llX updated: name=%s, remainingWeight=%.2f kg, capacity=%.2f L, kibbleDensity=%.2f g/L, servoIdlePwm=%d",
+          (unsigned long long)tankToUpdate.uid, tankToUpdate.name.c_str(), tankToUpdate.remaining_weight_kg, tankToUpdate.capacityLiters,
+          tankToUpdate.kibbleDensity, tankToUpdate.servoIdlePwm);
     } else {
         // This could fail if the tank was disconnected between the check and the commit.
         request->send(500, "application/json", "{\"error\":\"Failed to write update to tank EEPROM\"}");
@@ -722,7 +714,7 @@ void WebServer::_handleFeedImmediate(AsyncWebServerRequest* request, JsonDocumen
     if (xSemaphoreTake(_mutex, pdMS_TO_TICKS(1000)) == pdTRUE) {
         if (_deviceState.feedCommand.processed) {
             _deviceState.feedCommand.type        = FeedCommandType::IMMEDIATE;
-            _deviceState.feedCommand.tankUid     = strToU64(tankUid);
+            _deviceState.feedCommand.tankUid     = hexStrToU64(tankUid);
             _deviceState.feedCommand.amountGrams = amount;
             _deviceState.feedCommand.processed   = false;
             request->send(202, "application/json", "{\"success\":true, \"message\":\"Immediate feed command accepted\"}");

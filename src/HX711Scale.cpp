@@ -147,18 +147,17 @@ void HX711Scale::_scaleTask(void* pvParameters)
         float current_weight = instance->getWeight();
         long raw_value       = instance->getRawReading();
         if (xSemaphoreTake(instance->_mutex, portMAX_DELAY) == pdTRUE) {
+            // This mutex protects the global device state, which is a different resource.
             if (isnanf(current_weight)) {
                 instance->_deviceState.isWeightStable    = false;
                 instance->_deviceState.isScaleResponding = false;
             } else {
-                // This mutex protects the global device state, which is a different resource.
-
                 instance->_deviceState.isWeightStable    = (abs(current_weight - instance->_deviceState.currentWeight) < 0.5);
                 instance->_deviceState.currentWeight     = current_weight;
                 instance->_deviceState.currentRawValue   = raw_value;
-                instance->_deviceState.isScaleResponding = true;
-                xSemaphoreGive(instance->_mutex);
+                instance->_deviceState.isScaleResponding = true;                
             }
+            xSemaphoreGive(instance->_mutex);
         }
 
 
