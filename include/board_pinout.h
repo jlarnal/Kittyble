@@ -15,8 +15,8 @@
 // Apart from the custom "power" pin, the PCA9685 is controlled using the default I2C pinout.
 #define SERVO_POWER_ENABLE_PIN (33)
 
-// The 1kbits 1-wire eeprom are multiplexed through a CH32V003 slave MCU named "SwiMux" and
-// accessed through the SwiMuxSerial adapter class, using one UART peripheral.
+// Dallas 1-Wire EEPROMs (DS28E07/DS2431+, 1Kb each) are multiplexed through a CH32V003 slave
+// MCU named "SwiMux" (legacy name) and accessed through the SwiMuxSerial adapter class via UART.
 // This allows for up to 6 tanks, each on its own bus for identification.
 #define SWIMUX_SERIAL_DEVICE Serial2
 #define SWIMUX_TX_PIN (27)

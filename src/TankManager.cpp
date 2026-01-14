@@ -160,11 +160,11 @@ void TankManager::_switchToSwiMode()
 {
     _isServoMode = false;
     _pwm.setPWMFreq(50); // Low frequency for DC power
-    PCA9685::I2C_Result_e res = _pwm.setFull(-1, true); // Set all channels full on (powers the AT21CS01 eeproms through their pullpup resistors)
+    PCA9685::I2C_Result_e res = _pwm.setFull(-1, true); // Set all channels full on (powers the 1-Wire EEPROMs through their pullup resistors)
     if (res) {
         ESP_LOGE(TAG, "PCA9685 \"all full on\" failed (I2C error #%d)", res);
     } else {
-        ESP_LOGI(TAG, "PCA9685 switched to SWI power mode.");
+        ESP_LOGI(TAG, "PCA9685 switched to EEPROM power mode.");
     }
 }
 
@@ -236,6 +236,7 @@ bool TankInfo::fillFromEeprom(TankEEpromData_t& eeprom)
     capacityLiters = TankManager::q3_13_to_double(eeprom.data.capacity);
     kibbleDensity  = TankManager::q2_14_to_double(eeprom.data.density);
     w_capacity_kg  = (kibbleDensity / capacityLiters);
+    // Remaining kibble (in kg in TankInfo, in 16-bits integer grams in eeprom)
     if (eeprom.data.remainingGrams > 1.0) {
         remaining_weight_kg = w_capacity_kg / (((double)(int)eeprom.data.remainingGrams) * 1E-3);
     } else {
@@ -278,7 +279,7 @@ TankInfo::TankInfoDiscrepancies_e TankInfo::toTankData(TankEEpromData_t& eeprom)
         eeprom.data.capacity     = qCap;
         eeprom.data.density      = qDens;
     }
-    // Remaining kibble
+    // Remaining kibble (in grams in eeprom, in kg in TankInfo)
     uint32_t tankRemGrams = (uint32_t)std::abs(remaining_weight_kg * 1E-3);
     if (eeprom.data.remainingGrams != tankRemGrams) {
         result |= TID_REMAINING_CHANGED;

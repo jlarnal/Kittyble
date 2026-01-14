@@ -241,10 +241,10 @@ class TankManager {
 
     static TaskHandle_t _runningTask;
 
-    // A physical interface that let us address SWI memories (AT21CS01, 128 bytes) on 6 separate SWI buses. through a 57600B8N1 uart connection.
+    // A physical interface to address Dallas 1-Wire EEPROMs (DS28E07/DS2431+, 128 bytes) on 6 separate buses via 57600B8N1 UART.
     SwiMuxSerial_t _swiMux;
     SwiMuxPresenceReport_t _lastPresenceReport;
-    // A dedicated mutex to protect SWI bus transactions.
+    // A dedicated mutex to protect 1-Wire bus transactions.
     SemaphoreHandle_t _swimuxMutex;
 
 
