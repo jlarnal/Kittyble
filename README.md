@@ -517,7 +517,7 @@ The following areas are identified for potential enhancement:
 
 ## Appendix A: API Response Examples
 
-### A.1 Device Status Response
+### A.1 Device Status Response (`/api/status`)
 
 ```json
 {
@@ -530,9 +530,7 @@ The following areas are identified for potential enhancement:
   "tanks": [
     {
       "uid": "A1B2C3D4E5F6G7H8",
-      "name": "Chicken Kibble",
-      "busIndex": 0,
-      "remainingWeight": 1250
+      "name": "Chicken Kibble"
     }
   ],
   "battery": {
@@ -546,7 +544,25 @@ The following areas are identified for potential enhancement:
 }
 ```
 
-### A.2 Recipe Response
+### A.2 Tank Details Response (`/api/tanks`)
+
+```json
+[
+  {
+    "uid": "A1B2C3D4E5F6G7H8",
+    "name": "Chicken Kibble",
+    "busIndex": 0,
+    "remainingWeight": 1.25,
+    "capacity": 2.5,
+    "density": 0.65,
+    "calibration": {
+      "idlePwm": 1500
+    }
+  }
+]
+```
+
+### A.3 Recipe Response
 
 ```json
 {
