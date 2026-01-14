@@ -551,7 +551,6 @@ void WebServer::_handleExportSettings(AsyncWebServerRequest* request)
             snprintf(hexUid, sizeof(hexUid), "%llX", (unsigned long long)tank.uid);
             tankObj["uid"]           = hexUid;
             tankObj["name"]          = tank.name;
-            tankObj["w_capacity_kg"] = tank.w_capacity_kg;
         }
         xSemaphoreGive(_mutex);
     }
@@ -586,8 +585,7 @@ void WebServer::_handleGetTanks(AsyncWebServerRequest* request)
             tankObj["uid"]             = hexUid;
             tankObj["name"]            = tank.name;
             tankObj["busIndex"]        = tank.busIndex;
-            tankObj["wcapacity"]       = tank.w_capacity_kg * 1000;
-            tankObj["remainingWeight"] = tank.remaining_weight_kg * 1000;
+            tankObj["remainingWeight"] = tank.remaining_weight_kg;
             tankObj["capacity"]        = tank.capacityLiters;
             tankObj["density"]         = tank.kibbleDensity;
             JsonObject calib           = tankObj["calibration"].to<JsonObject>();
@@ -634,10 +632,7 @@ void WebServer::_handleUpdateTank(AsyncWebServerRequest* request, JsonDocument& 
         tankToUpdate.name = doc["name"].as<std::string>();
     }
     if (!doc["remainingWeight"].isNull()) {
-        // The API uses grams. We need to set remaining_weight_kg to a value that,
-        // when multiplied by 1E-3 in the buggy toTankData method, yields the correct gram value.
-        // Therefore, we must multiply by 1000.
-        tankToUpdate.remaining_weight_kg = doc["remainingWeight"].as<double>() * 1000.0;
+        tankToUpdate.remaining_weight_kg = doc["remainingWeight"].as<double>();
     }
     if (!doc["capacity"].isNull()) {
         tankToUpdate.capacityLiters = doc["capacity"].as<double>();
@@ -988,7 +983,7 @@ void WebServer::_handleGetSensorDiagnostics(AsyncWebServerRequest* request)
         for (const auto& tank : _deviceState.connectedTanks) {
             JsonObject tankLevel         = tankLevels.add<JsonObject>();
             tankLevel["uid"]             = tank.uid;
-            tankLevel["remainingWeight"] = tank.remaining_weight_kg * 1000;
+            tankLevel["remainingWeight"] = tank.remaining_weight_kg;
             tankLevel["sensorType"]      = "estimation";
         }
         xSemaphoreGive(_mutex);

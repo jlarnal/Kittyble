@@ -235,13 +235,8 @@ bool TankInfo::fillFromEeprom(TankEEpromData_t& eeprom)
 
     capacityLiters = TankManager::q3_13_to_double(eeprom.data.capacity);
     kibbleDensity  = TankManager::q2_14_to_double(eeprom.data.density);
-    w_capacity_kg  = (kibbleDensity / capacityLiters);
     // Remaining kibble (in kg in TankInfo, in 16-bits integer grams in eeprom)
-    if (eeprom.data.remainingGrams > 1.0) {
-        remaining_weight_kg = w_capacity_kg / (((double)(int)eeprom.data.remainingGrams) * 1E-3);
-    } else {
-        remaining_weight_kg = 0;
-    }
+    remaining_weight_kg = eeprom.data.remainingGrams * 1E-3;
     servoIdlePwm = eeprom.data.servoIdlePwm;
     isFullInfo   = true;
     return true;

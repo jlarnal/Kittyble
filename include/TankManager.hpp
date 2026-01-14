@@ -91,8 +91,7 @@ struct TankInfo {
     double capacityLiters; // Volumetric capacity in Liters
     double kibbleDensity; // Kibble density in kg/L
 
-    // Calculated values based on EEPROM data, matching the API schema
-    double w_capacity_kg; // Calculated weight capacity in kilograms
+    // Calculated value based on EEPROM data
     double remaining_weight_kg; // Estimated remaining weight in kilograms
 
     // Servo calibration data
@@ -106,7 +105,6 @@ struct TankInfo {
           isFullInfo(false),
           capacityLiters(0),
           kibbleDensity(0),
-          w_capacity_kg(0),
           remaining_weight_kg(0),
           servoIdlePwm(1500)
     {}
