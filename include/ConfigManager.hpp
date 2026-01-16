@@ -2,6 +2,7 @@
 #define CONFIGMANAGER_HPP
 
 #include <Arduino.h>
+#include <SPIFFS.h>
 #include <vector>
 #include <string>
 #include "nvs_flash.h"
@@ -62,6 +63,18 @@ private:
 
     bool _openNVS();
     void _closeNVS();
+
+    // Recipe file paths (SPIFFS) - triple redundancy
+    static constexpr const char* RECIPE_FILE_PRIMARY = "/recipes.json";
+    static constexpr const char* RECIPE_FILE_BACKUP1 = "/recipes.bak1.json";
+    static constexpr const char* RECIPE_FILE_BACKUP2 = "/recipes.bak2.json";
+
+    // Helper methods for SPIFFS recipe storage
+    bool _saveRecipeFile(const char* path, const std::string& jsonContent);
+    bool _loadRecipeFile(const char* path, std::vector<Recipe>& recipes);
+    uint32_t _computeRecipeCRC(const std::string& jsonStr);
+    std::vector<Recipe> _loadRecipesFromNVS_Legacy();
+    void _deleteNVSRecipes();
 };
 
 #endif // CONFIGMANAGER_HPP

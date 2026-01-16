@@ -1,6 +1,7 @@
 #include "ConfigManager.hpp"
 #include "ArduinoJson.h"
 #include "esp_log.h"
+#include "rom/crc.h"
 #include "TankManager.hpp"
 #include <cstdint>
 
@@ -163,43 +164,105 @@ bool ConfigManager::loadHopperCalibration(uint16_t& closed_pwm, uint16_t& open_p
     return true;
 }
 
+// ============================================================================
+// SPIFFS Recipe Storage Helpers
+// ============================================================================
 
-bool ConfigManager::saveRecipes(const std::vector<Recipe>& recipes)
+uint32_t ConfigManager::_computeRecipeCRC(const std::string& jsonStr)
 {
-    JsonDocument doc;
-    JsonArray array = doc.to<JsonArray>();
-    for (const auto& recipe : recipes) {
-        JsonObject recipeObj     = array.add<JsonObject>();
-        recipeObj["id"]          = recipe.id;
-        recipeObj["name"]        = recipe.name;
-        recipeObj["dailyWeight"] = recipe.dailyWeight;
-        recipeObj["servings"]    = recipe.servings;
-        recipeObj["created"]     = recipe.created;
-        recipeObj["lastUsed"]    = recipe.lastUsed;
-
-        JsonArray ingredients = recipeObj["ingredients"].to<JsonArray>();
-        for (const auto& ing : recipe.ingredients) {
-            JsonObject ingObj = ingredients.add<JsonObject>();
-            ingObj["tankUid"] = ing.tankUid;
-            // Persist the percentage value
-            ingObj["percentage"] = ing.percentage;
-        }
-    }
-
-    std::string jsonString;
-    serializeJson(doc, jsonString);
-
-    if (!_openNVS())
-        return false;
-    esp_err_t err = nvs_set_str(_nvs_handle, "recipes", jsonString.c_str());
-    if (err == ESP_OK)
-        err = nvs_commit(_nvs_handle);
-    _closeNVS();
-    ESP_LOGI(TAG, "Saved %d recipes to NVS.", recipes.size());
-    return err == ESP_OK;
+    return crc32_le(0, (const uint8_t*)jsonStr.c_str(), jsonStr.length());
 }
 
-std::vector<Recipe> ConfigManager::loadRecipes()
+bool ConfigManager::_saveRecipeFile(const char* path, const std::string& jsonContent)
+{
+    File file = SPIFFS.open(path, FILE_WRITE);
+    if (!file) {
+        ESP_LOGE(TAG, "Failed to open %s for writing", path);
+        return false;
+    }
+
+    size_t written = file.print(jsonContent.c_str());
+    file.close();
+
+    if (written != jsonContent.length()) {
+        ESP_LOGE(TAG, "Incomplete write to %s: wrote %d of %d bytes",
+                 path, written, jsonContent.length());
+        return false;
+    }
+
+    ESP_LOGI(TAG, "Successfully wrote %d bytes to %s", written, path);
+    return true;
+}
+
+bool ConfigManager::_loadRecipeFile(const char* path, std::vector<Recipe>& recipes)
+{
+    if (!SPIFFS.exists(path)) {
+        ESP_LOGW(TAG, "Recipe file %s does not exist", path);
+        return false;
+    }
+
+    File file = SPIFFS.open(path, FILE_READ);
+    if (!file) {
+        ESP_LOGE(TAG, "Failed to open %s for reading", path);
+        return false;
+    }
+
+    JsonDocument doc;
+    DeserializationError error = deserializeJson(doc, file);
+    file.close();
+
+    if (error) {
+        ESP_LOGE(TAG, "JSON parse error in %s: %s", path, error.c_str());
+        return false;
+    }
+
+    // Validate envelope structure
+    if (!doc["crc32"].is<uint32_t>() || !doc["recipes"].is<JsonArray>()) {
+        ESP_LOGE(TAG, "Invalid envelope structure in %s", path);
+        return false;
+    }
+
+    // Extract and verify CRC
+    uint32_t storedCRC = doc["crc32"].as<uint32_t>();
+
+    // Re-serialize recipes array to compute CRC
+    JsonArray recipesArray = doc["recipes"].as<JsonArray>();
+    std::string recipesJson;
+    serializeJson(recipesArray, recipesJson);
+    uint32_t computedCRC = _computeRecipeCRC(recipesJson);
+
+    if (storedCRC != computedCRC) {
+        ESP_LOGE(TAG, "CRC mismatch in %s: stored=0x%08X, computed=0x%08X",
+                 path, storedCRC, computedCRC);
+        return false;
+    }
+
+    // Parse recipes
+    recipes.clear();
+    for (JsonObject recipeObj : recipesArray) {
+        Recipe recipe;
+        recipe.id          = recipeObj["id"].as<int>();
+        recipe.name        = recipeObj["name"].as<std::string>();
+        recipe.dailyWeight = recipeObj["dailyWeight"] | 0.0;
+        recipe.servings    = recipeObj["servings"] | 1;
+        recipe.created     = recipeObj["created"] | 0LL;
+        recipe.lastUsed    = recipeObj["lastUsed"] | 0LL;
+        recipe.isEnabled   = recipeObj["isEnabled"] | true;
+
+        for (JsonObject ingObj : recipeObj["ingredients"].as<JsonArray>()) {
+            RecipeIngredient ing;
+            ing.tankUid    = ingObj["tankUid"].as<uint64_t>();
+            ing.percentage = ingObj["percentage"] | 0.0f;
+            recipe.ingredients.push_back(ing);
+        }
+        recipes.push_back(recipe);
+    }
+
+    ESP_LOGI(TAG, "Successfully loaded %d recipes from %s", recipes.size(), path);
+    return true;
+}
+
+std::vector<Recipe> ConfigManager::_loadRecipesFromNVS_Legacy()
 {
     std::vector<Recipe> recipes;
     if (!_openNVS())
@@ -214,17 +277,17 @@ std::vector<Recipe> ConfigManager::loadRecipes()
                 JsonArray array = doc.as<JsonArray>();
                 for (JsonObject recipeObj : array) {
                     Recipe recipe;
-                    recipe.id          = recipeObj["id"].as<std::uint64_t>();
+                    recipe.id          = recipeObj["id"].as<int>();
                     recipe.name        = recipeObj["name"].as<std::string>();
                     recipe.dailyWeight = recipeObj["dailyWeight"] | 0.0;
                     recipe.servings    = recipeObj["servings"] | 1;
-                    recipe.created     = recipeObj["created"] | 0;
-                    recipe.lastUsed    = recipeObj["lastUsed"] | 0;
+                    recipe.created     = recipeObj["created"] | 0LL;
+                    recipe.lastUsed    = recipeObj["lastUsed"] | 0LL;
+                    recipe.isEnabled   = recipeObj["isEnabled"] | true;
 
                     for (JsonObject ingObj : recipeObj["ingredients"].as<JsonArray>()) {
                         RecipeIngredient ing;
-                        ing.tankUid = ingObj["tankUid"].as<std::uint64_t>();
-                        // Load the percentage value
+                        ing.tankUid    = ingObj["tankUid"].as<uint64_t>();
                         ing.percentage = ingObj["percentage"] | 0.0f;
                         recipe.ingredients.push_back(ing);
                     }
@@ -235,12 +298,131 @@ std::vector<Recipe> ConfigManager::loadRecipes()
         delete[] buf;
     }
     _closeNVS();
-    ESP_LOGI(TAG, "Loaded %d recipes from NVS.", recipes.size());
+    ESP_LOGI(TAG, "Legacy NVS: loaded %d recipes", recipes.size());
+    return recipes;
+}
+
+void ConfigManager::_deleteNVSRecipes()
+{
+    if (!_openNVS())
+        return;
+    nvs_erase_key(_nvs_handle, "recipes");
+    nvs_commit(_nvs_handle);
+    _closeNVS();
+    ESP_LOGI(TAG, "Deleted legacy NVS recipes key");
+}
+
+// ============================================================================
+// Public Recipe Methods (SPIFFS-based with triple redundancy)
+// ============================================================================
+
+bool ConfigManager::saveRecipes(const std::vector<Recipe>& recipes)
+{
+    // Build recipes JSON array
+    JsonDocument recipesDoc;
+    JsonArray array = recipesDoc.to<JsonArray>();
+
+    for (const auto& recipe : recipes) {
+        JsonObject recipeObj     = array.add<JsonObject>();
+        recipeObj["id"]          = recipe.id;
+        recipeObj["name"]        = recipe.name;
+        recipeObj["dailyWeight"] = recipe.dailyWeight;
+        recipeObj["servings"]    = recipe.servings;
+        recipeObj["created"]     = recipe.created;
+        recipeObj["lastUsed"]    = recipe.lastUsed;
+        recipeObj["isEnabled"]   = recipe.isEnabled;
+
+        JsonArray ingredients = recipeObj["ingredients"].to<JsonArray>();
+        for (const auto& ing : recipe.ingredients) {
+            JsonObject ingObj    = ingredients.add<JsonObject>();
+            ingObj["tankUid"]    = ing.tankUid;
+            ingObj["percentage"] = ing.percentage;
+        }
+    }
+
+    // Serialize recipes array for CRC computation
+    std::string recipesJson;
+    serializeJson(recipesDoc, recipesJson);
+    uint32_t crc = _computeRecipeCRC(recipesJson);
+
+    // Build envelope with CRC
+    JsonDocument envelopeDoc;
+    envelopeDoc["crc32"]   = crc;
+    envelopeDoc["recipes"] = recipesDoc;
+
+    std::string fullJson;
+    serializeJson(envelopeDoc, fullJson);
+
+    // Write to all 3 files for redundancy
+    const char* files[] = { RECIPE_FILE_PRIMARY, RECIPE_FILE_BACKUP1, RECIPE_FILE_BACKUP2 };
+    int successCount = 0;
+
+    for (const char* path : files) {
+        if (_saveRecipeFile(path, fullJson)) {
+            successCount++;
+        }
+    }
+
+    if (successCount == 0) {
+        ESP_LOGE(TAG, "CRITICAL: Failed to save recipes to any file!");
+        return false;
+    } else if (successCount < 3) {
+        ESP_LOGW(TAG, "Saved recipes to %d of 3 files (partial success)", successCount);
+    } else {
+        ESP_LOGI(TAG, "Saved %d recipes to all 3 redundant files", recipes.size());
+    }
+
+    return true;
+}
+
+std::vector<Recipe> ConfigManager::loadRecipes()
+{
+    std::vector<Recipe> recipes;
+
+    // Try each file in priority order
+    const char* files[] = { RECIPE_FILE_PRIMARY, RECIPE_FILE_BACKUP1, RECIPE_FILE_BACKUP2 };
+
+    for (const char* path : files) {
+        if (_loadRecipeFile(path, recipes)) {
+            ESP_LOGI(TAG, "Loaded recipes from %s", path);
+
+            // If we loaded from a backup, repair the primary files
+            if (path != RECIPE_FILE_PRIMARY) {
+                ESP_LOGW(TAG, "Primary file was invalid, repairing from %s", path);
+                saveRecipes(recipes);  // Rewrite all 3 files
+            }
+            return recipes;
+        }
+    }
+
+    // No valid SPIFFS file found - try legacy NVS migration
+    ESP_LOGW(TAG, "No valid SPIFFS recipe files found, attempting NVS migration");
+    recipes = _loadRecipesFromNVS_Legacy();
+
+    if (!recipes.empty()) {
+        ESP_LOGI(TAG, "Migrating %d recipes from NVS to SPIFFS", recipes.size());
+        if (saveRecipes(recipes)) {
+            _deleteNVSRecipes();  // Clean up legacy storage
+        }
+        return recipes;
+    }
+
+    ESP_LOGI(TAG, "No recipes found in NVS or SPIFFS, returning empty list");
     return recipes;
 }
 
 bool ConfigManager::factoryReset()
 {
+    // Delete SPIFFS recipe files
+    const char* recipeFiles[] = { RECIPE_FILE_PRIMARY, RECIPE_FILE_BACKUP1, RECIPE_FILE_BACKUP2 };
+    for (const char* path : recipeFiles) {
+        if (SPIFFS.exists(path)) {
+            SPIFFS.remove(path);
+            ESP_LOGI(TAG, "Deleted recipe file: %s", path);
+        }
+    }
+
+    // Erase NVS
     if (!_openNVS())
         return false;
     esp_err_t err = nvs_erase_all(_nvs_handle);

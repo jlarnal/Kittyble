@@ -132,7 +132,34 @@ void setup()
     if (wifiConnected) {
 
         ESP_LOGI(TAG, "IP address is %s", WiFi.localIP().toString().c_str());
+
+        // Configure ArduinoOTA
+        ArduinoOTA.setHostname("kibblet5");
+        ArduinoOTA.onStart([]() {
+            ESP_LOGI(TAG, "OTA Update starting...");
+        });
+        ArduinoOTA.onEnd([]() {
+            ESP_LOGI(TAG, "OTA Update complete!");
+        });
+        ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
+            static int lastPercent = -1;
+            int percent = (progress * 100) / total;
+            if (percent != lastPercent && percent % 10 == 0) {
+                ESP_LOGI(TAG, "OTA Progress: %u%%", percent);
+                lastPercent = percent;
+            }
+        });
+        ArduinoOTA.onError([](ota_error_t error) {
+            ESP_LOGE(TAG, "OTA Error [%u]: %s", error,
+                error == OTA_AUTH_ERROR ? "Auth Failed" :
+                error == OTA_BEGIN_ERROR ? "Begin Failed" :
+                error == OTA_CONNECT_ERROR ? "Connect Failed" :
+                error == OTA_RECEIVE_ERROR ? "Receive Failed" :
+                error == OTA_END_ERROR ? "End Failed" : "Unknown");
+        });
         ArduinoOTA.begin();
+        ESP_LOGI(TAG, "ArduinoOTA initialized on port 3232");
+
         xTaskCreate(battAndOTA_Task, "Batt monitor", 3192, &battMon, 10, NULL);
 
 
@@ -211,31 +238,43 @@ void loop()
 
 void battAndOTA_Task(void* pvParameters)
 {
+    constexpr uint32_t OTA_POLL_PERIOD_MS         = 50;   // Fast OTA polling
     constexpr uint32_t BATTERY_SAMPLING_PERIOD_MS = 500;
+    constexpr size_t BATTERY_SAMPLE_INTERVAL      = BATTERY_SAMPLING_PERIOD_MS / OTA_POLL_PERIOD_MS;
     constexpr size_t REPORTS_PERIOD               = 5000 / BATTERY_SAMPLING_PERIOD_MS;
 
     size_t reports = REPORTS_PERIOD;
+    size_t batteryCounter = 0;
+
     if (pvParameters == nullptr) {
         ESP_LOGE(TAG, "Battery object pointer was null in `batteryTask`");
         return;
     } else {
-        ESP_LOGI(TAG, "Battery manager running.");
+        ESP_LOGI(TAG, "Battery & OTA task running.");
         Serial.flush();
     }
 
     Battery* pBatt = (Battery*)pvParameters;
     pBatt->begin(3300, 0.5f, asigmoidal);
     uint16_t voltage;
+
     for (;;) {
-        pBatt->refreshAverage();
-        pBatt->getAverages(&voltage, &globalDeviceState.batteryLevel);
+        ArduinoOTA.handle();
+
+        // Sample battery less frequently
+        if (++batteryCounter >= BATTERY_SAMPLE_INTERVAL) {
+            batteryCounter = 0;
+            pBatt->refreshAverage();
+            pBatt->getAverages(&voltage, &globalDeviceState.batteryLevel);
 #if defined(PRINT_BATT_STATUS) && !defined(LOG_TO_SPIFFS)
-        if (!reports--) {
-            Serial.printf("Battery status: %dmV, %d%%\r\n", voltage, globalDeviceState.batteryLevel);
-            reports = REPORTS_PERIOD;
-        }
+            if (!reports--) {
+                Serial.printf("Battery status: %dmV, %d%%\r\n", voltage, globalDeviceState.batteryLevel);
+                reports = REPORTS_PERIOD;
+            }
 #endif
-        vTaskDelay(pdMS_TO_TICKS(BATTERY_SAMPLING_PERIOD_MS));
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(OTA_POLL_PERIOD_MS));
     }
 }
 

@@ -210,8 +210,8 @@ Dedicated FreeRTOS task runs at 10 Hz (priority 10) performing continuous safety
 | Service | Port | Description |
 |---------|------|-------------|
 | HTTP REST API | 80 | Primary control interface |
-| mDNS | 5353 | Device discovery |
-| OTA Updates | - | ArduinoOTA protocol |
+| mDNS | 5353 | Device discovery (kibblet5.local) |
+| OTA Updates | 3232 | ArduinoOTA protocol |
 | NTP | 123 | Time synchronization |
 
 ---
@@ -334,7 +334,6 @@ Display updates are handled by a dedicated task (priority 4) to prevent blocking
 | WiFi Credentials | SSID and password |
 | Scale Calibration | Factor and zero offset |
 | Hopper Calibration | Open/close PWM values |
-| Recipes | Full recipe definitions (JSON) |
 | Device Settings | Operational parameters |
 | Timezone | Time zone preference |
 
@@ -343,6 +342,11 @@ Display updates are handled by a dedicated task (priority 4) to prevent blocking
 | File | Description |
 |------|-------------|
 | `/log.txt` | Rolling system log (max 64KB) |
+| `/recipes.json` | Primary recipe storage (JSON with CRC32) |
+| `/recipes.bak1.json` | Backup copy 1 |
+| `/recipes.bak2.json` | Backup copy 2 |
+
+**Recipe File Redundancy:** Recipes are stored with triple redundancy to protect against flash memory errors. All three files contain identical content with a CRC32 checksum for integrity validation. On load, the system tries each file in order and automatically repairs corrupted files from valid backups.
 
 ### 11.3 Tank EEPROM
 
@@ -487,7 +491,20 @@ CALIBRATING -> IDLE  (on calibration complete)
 - **Flash Size:** 8MB @ 80MHz
 - **Filesystem:** SPIFFS with custom partition
 
-### 18.2 Key Dependencies
+### 18.2 Partition Layout
+
+Custom partition table (`kibble_part.csv`) with OTA support:
+
+| Partition | Type | Offset | Size | Purpose |
+|-----------|------|--------|------|---------|
+| nvs | data | 0x9000 | 20KB | Non-volatile storage |
+| otadata | data | 0xe000 | 8KB | OTA partition tracking |
+| app0 | ota_0 | 0x10000 | 2MB | Application slot 0 |
+| app1 | ota_1 | 0x210000 | 2MB | Application slot 1 |
+| spiffs | data | 0x410000 | 3.875MB | Filesystem storage |
+| coredump | data | 0x7F0000 | 64KB | Crash dump storage |
+
+### 18.3 Key Dependencies
 
 | Library | Version | Purpose |
 |---------|---------|---------|
