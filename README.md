@@ -223,17 +223,17 @@ Dedicated FreeRTOS task runs at 10 Hz (priority 10) performing continuous safety
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | `/api/status` | Device operational status |
-| GET | `/api/system` | System info (uptime, version, build) |
+| GET | `/api/system/info` | System info (uptime, version, build) |
 | POST | `/api/system/restart` | Reboot device |
 | POST | `/api/system/factory-reset` | Factory reset |
-| POST | `/api/system/set-time` | Set system time |
+| POST | `/api/system/time` | Set system time |
 
 ### 8.2 Settings Endpoints
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | `/api/settings` | Get all settings |
-| POST | `/api/settings` | Update settings |
+| PUT | `/api/settings` | Update settings |
 | GET | `/api/settings/export` | Export settings as JSON |
 
 ### 8.3 Tank Endpoints
@@ -241,14 +241,14 @@ Dedicated FreeRTOS task runs at 10 Hz (priority 10) performing continuous safety
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | `/api/tanks` | List all connected tanks |
-| PATCH | `/api/tanks/{uid}` | Update tank info (name, density, capacity) |
+| PUT | `/api/tanks/{uid}` | Update tank info (name, density, capacity) |
 | GET | `/api/tanks/{uid}/history` | Tank consumption history |
 
 ### 8.4 Scale Endpoints
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/api/scale` | Current weight and status |
+| GET | `/api/scale/current` | Current weight and status |
 | POST | `/api/scale/tare` | Tare the scale |
 | POST | `/api/scale/calibrate` | Calibrate with known weight |
 
@@ -256,10 +256,10 @@ Dedicated FreeRTOS task runs at 10 Hz (priority 10) performing continuous safety
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| POST | `/api/feed/immediate` | Dispense specific weight from tank |
-| POST | `/api/feed/recipe/{recipeId}` | Execute recipe (optional servings param) |
+| POST | `/api/feed/immediate/{uid}` | Dispense specific weight from tank |
+| POST | `/api/feed/recipe/{id}` | Execute recipe (optional servings param) |
 | GET | `/api/feeding/history` | Feeding history with timestamps |
-| POST | `/api/feed/stop` | Emergency stop |
+| POST | `/api/feeding/stop` | Emergency stop |
 
 ### 8.6 Recipe Endpoints
 
@@ -267,18 +267,24 @@ Dedicated FreeRTOS task runs at 10 Hz (priority 10) performing continuous safety
 |--------|----------|-------------|
 | GET | `/api/recipes` | List all recipes |
 | POST | `/api/recipes` | Create new recipe |
-| PATCH | `/api/recipes/{id}` | Update recipe |
+| PUT | `/api/recipes/{id}` | Update recipe |
 | DELETE | `/api/recipes/{id}` | Delete recipe |
 
-### 8.7 Diagnostics Endpoints
+### 8.7 Diagnostics & Logs Endpoints
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | `/api/diagnostics/sensors` | Sensor status |
 | GET | `/api/diagnostics/servos` | Servo diagnostics |
-| GET | `/api/diagnostics/network` | WiFi/network info |
-| GET | `/api/diagnostics/system-logs` | System logs from SPIFFS |
-| GET | `/api/diagnostics/feeding-logs` | Feeding operation logs |
+| GET | `/api/network/info` | WiFi/network info |
+| GET | `/api/logs/system` | System logs from SPIFFS |
+| GET | `/api/logs/feeding` | Feeding operation logs |
+
+### 8.8 OTA Update Endpoint
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/update` | HTTP OTA firmware upload |
 
 ---
 
