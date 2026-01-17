@@ -70,5 +70,12 @@
         "semaphore": "cpp",
         "stop_token": "cpp",
         "variant": "cpp"
+    },
+    "workbench.colorCustomizations": {
+        "titleBar.activeBackground": "#102020",
+        "titleBar.border": "#102020",
+        "titleBar.activeForeground": "#c0c0c0",
+        "titleBar.inactiveBackground": "#344141",
+        "titleBar.inactiveForeground": "#c9c9c9"
     }
 }
