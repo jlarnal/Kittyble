@@ -3,6 +3,7 @@
 
 #include <string>
 #include <vector>
+#include <functional>
 #include "PCA9685.h"
 #include "freertos/semphr.h"
 #include "board_pinout.h"
@@ -141,7 +142,7 @@ class TankManager {
           _pwm(PCA9685()),
           _isServoMode(false),
           _swiMux(SWIMUX_SERIAL_DEVICE, SWIMUX_TX_PIN, SWIMUX_RX_PIN),
-          _lastPresenceReport { 0, 0 }
+          _lastKnownUids{}
     {}
 
     /** @brief Initialize the multiplexed OneWire setup but does not start the task. */
@@ -200,6 +201,18 @@ class TankManager {
      */
     inline bool disableSwiMux() { return _swiMux.sleep(); }
 
+    /**
+     * @brief Sets a callback to be invoked when the tank population changes.
+     * @param cb The callback function to invoke on tank population change.
+     */
+    void setOnTanksChangedCallback(std::function<void()> cb);
+
+    /**
+     * @brief Prints formatted information about all connected tanks to a Stream.
+     * @param stream The output stream (e.g., Serial) to print to.
+     */
+    void printConnectedTanks(Stream& stream);
+
     // --- Servo Control Methods ---
     void setServoPower(bool on);
     PCA9685::I2C_Result_e setContinuousServo(uint8_t servoNum, float speed); // speed from -1.0 to 1.0
@@ -241,9 +254,11 @@ class TankManager {
 
     // A physical interface to address Dallas 1-Wire EEPROMs (DS28E07/DS2431+, 128 bytes) on 6 separate buses via 57600B8N1 UART.
     SwiMuxSerial_t _swiMux;
-    SwiMuxPresenceReport_t _lastPresenceReport;
+    RollCallArray_t _lastKnownUids;
     // A dedicated mutex to protect 1-Wire bus transactions.
     SemaphoreHandle_t _swimuxMutex;
+    // Callback invoked when tank population changes (for SSE notifications).
+    std::function<void()> _onTanksChangedCallback;
 
 
     // Internal list of tanks, which holds the comprehensive state.

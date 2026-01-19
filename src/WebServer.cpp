@@ -84,6 +84,7 @@ static uint64_t hexStrToU64(const String& str)
 WebServer::WebServer(DeviceState& deviceState, SemaphoreHandle_t& mutex, ConfigManager& configManager, RecipeProcessor& recipeProcessor,
   TankManager& tankManager, EPaperDisplay& display)
     : _server(80),
+      _events("/api/events"),
       _deviceState(deviceState),
       _mutex(mutex),
       _configManager(configManager),
@@ -265,6 +266,12 @@ void WebServer::startAPIServer()
 
     _setupAPIRoutes();
 
+    // SSE endpoint for tank population change notifications
+    _server.addHandler(&_events);
+    _tankManager.setOnTanksChangedCallback([this]() {
+        _events.send("{}", "tanks_changed");
+    });
+
     // Serve static files with Gzip support
     _server.on("/", HTTP_GET, [](AsyncWebServerRequest* request) {
         String path       = "/index.html";
@@ -420,8 +427,8 @@ void WebServer::_handleGetStatus(AsyncWebServerRequest* request)
     if (xSemaphoreTake(_mutex, pdMS_TO_TICKS(200)) == pdTRUE) {
         doc["battery"]        = _deviceState.batteryLevel; // Integer (0-100). Current battery percentage.
         doc["state"]          = _deviceState.getStateString(); // String. Enum: "IDLE", "FEEDING", "ERROR", "CALIBRATING".
-        doc["last_feed_time"] = _deviceState.lastFeedTime; // String. Time of the last successful feed (HH:MM format).
-        doc["last_recipe"]    = _deviceState.lastRecipe.name; // String. Name of the recipe last used.
+        doc["lastFeedTime"] = _deviceState.lastFeedTime; // String. Time of the last successful feed (HH:MM format).
+        doc["lastRecipe"]   = _deviceState.lastRecipe.name; // String. Name of the recipe last used.
         doc["error"]          = _deviceState.lastError;
         xSemaphoreGive(_mutex);
     } else {
@@ -549,8 +556,8 @@ void WebServer::_handleExportSettings(AsyncWebServerRequest* request)
             JsonObject tankObj = tanks.add<JsonObject>();
             char hexUid[17];
             snprintf(hexUid, sizeof(hexUid), "%llX", (unsigned long long)tank.uid);
-            tankObj["uid"]           = hexUid;
-            tankObj["name"]          = tank.name;
+            tankObj["uid"]  = hexUid;
+            tankObj["name"] = tank.name;
         }
         xSemaphoreGive(_mutex);
     }
@@ -657,7 +664,7 @@ void WebServer::_handleUpdateTank(AsyncWebServerRequest* request, JsonDocument& 
     if (_tankManager.commitTankInfo(tankToUpdate)) {
         request->send(200, "application/json", "{\"success\":true}");
         // Print updated tank info for debugging using ESP_LOGI
-        ESP_LOGI(TAG, "Tank %llX updated: name=%s, remainingWeight=%.2f kg, capacity=%.2f L, kibbleDensity=%.2f g/L, servoIdlePwm=%d",
+        ESP_LOGI(TAG, "Tank %llX updated: name=%s, remainingWeight=%.2f kg, capacity=%.2f L, kibbleDensity=%.2f kg/L, servoIdlePwm=%d",
           (unsigned long long)tankToUpdate.uid, tankToUpdate.name.c_str(), tankToUpdate.remaining_weight_kg, tankToUpdate.capacityLiters,
           tankToUpdate.kibbleDensity, tankToUpdate.servoIdlePwm);
     } else {
@@ -852,10 +859,12 @@ void WebServer::_handleGetRecipes(AsyncWebServerRequest* request)
         recipeObj["dailyWeight"] = recipe.dailyWeight;
         recipeObj["servings"]    = recipe.servings;
 
-        JsonArray ingredients = recipeObj["tanks"].to<JsonArray>();
+        JsonArray ingredients = recipeObj["ingredients"].to<JsonArray>();
         for (const auto& ing : recipe.ingredients) {
-            JsonObject ingObj    = ingredients.add<JsonObject>();
-            ingObj["tankUid"]    = ing.tankUid;
+            JsonObject ingObj = ingredients.add<JsonObject>();
+            char hexUid[17];
+            snprintf(hexUid, sizeof(hexUid), "%llX", (unsigned long long)ing.tankUid);
+            ingObj["tankUid"]    = hexUid;
             ingObj["percentage"] = ing.percentage;
         }
         recipeObj["created"]  = recipe.created;
@@ -868,9 +877,18 @@ void WebServer::_handleGetRecipes(AsyncWebServerRequest* request)
 
 void WebServer::_handleAddRecipe(AsyncWebServerRequest* request, JsonDocument& doc)
 {
+#if ESP_LOG_LEVEL >= ESP_LOG_INFO && !defined(LOG_TO_FILE_ENABLED)
+    {
+        String payload;
+        serializeJson(doc, payload);
+        ESP_LOGI(TAG, "_handleAddRecipe: payload=%s", payload.c_str());
+    }
+#endif
+
     Recipe recipe;
     recipe.name = doc["name"].as<std::string>();
     if (recipe.name.empty()) {
+        ESP_LOGI(TAG, "_handleAddRecipe: Recipe name is required");
         request->send(400, "application/json", "{\"error\":\"Recipe name is required\"}");
         return;
     }
@@ -878,20 +896,21 @@ void WebServer::_handleAddRecipe(AsyncWebServerRequest* request, JsonDocument& d
     recipe.dailyWeight = doc["dailyWeight"];
     recipe.servings    = doc["servings"];
 
-    JsonArray tanks    = doc["tanks"];
+    JsonArray tanks    = doc["ingredients"];
     float totalPercent = 0;
     for (JsonObject tank : tanks) {
         totalPercent += tank["percentage"].as<float>();
     }
 
     if (abs(totalPercent - 100.0) > 0.1) {
+        ESP_LOGI(TAG, "_handleAddRecipe: Percentages must sum to 100 (got %.2f)", totalPercent);
         request->send(400, "application/json", "{\"error\":\"Percentages must sum to 100\"}");
         return;
     }
 
     for (JsonObject tank : tanks) {
         RecipeIngredient ing;
-        ing.tankUid    = tank["tankUid"].as<std::uint64_t>();
+        ing.tankUid    = hexStrToU64(tank["tankUid"].as<String>());
         ing.percentage = tank["percentage"].as<float>();
         recipe.ingredients.push_back(ing);
     }
@@ -899,14 +918,24 @@ void WebServer::_handleAddRecipe(AsyncWebServerRequest* request, JsonDocument& d
     if (_recipeProcessor.addRecipe(recipe)) {
         request->send(200, "application/json", "{\"success\":true}");
     } else {
+        ESP_LOGI(TAG, "_handleAddRecipe: Failed to save recipe '%s'", recipe.name.c_str());
         request->send(500, "application/json", "{\"error\":\"Failed to save recipe\"}");
     }
 }
 
 void WebServer::_handleUpdateRecipe(AsyncWebServerRequest* request, JsonDocument& doc)
 {
+#if ESP_LOG_LEVEL >= ESP_LOG_INFO && !defined(LOG_TO_FILE_ENABLED)
+    {
+        String payload;
+        serializeJson(doc, payload);
+        ESP_LOGI(TAG, "_handleUpdateRecipe: payload=%s", payload.c_str());
+    }
+#endif
+
     int recipeId = request->pathArg(0).toInt();
     if (recipeId <= 0) {
+        ESP_LOGI(TAG, "_handleUpdateRecipe: Invalid recipeId %d", recipeId);
         request->send(400, "application/json", "{\"error\":\"Invalid recipeId\"}");
         return;
     }
@@ -915,6 +944,7 @@ void WebServer::_handleUpdateRecipe(AsyncWebServerRequest* request, JsonDocument
     recipe.id   = recipeId;
     recipe.name = doc["name"].as<std::string>();
     if (recipe.name.empty()) {
+        ESP_LOGI(TAG, "_handleUpdateRecipe: Recipe name is required for recipeId %d", recipeId);
         request->send(400, "application/json", "{\"error\":\"Recipe name is required\"}");
         return;
     }
@@ -922,13 +952,14 @@ void WebServer::_handleUpdateRecipe(AsyncWebServerRequest* request, JsonDocument
     recipe.dailyWeight = doc["dailyWeight"];
     recipe.servings    = doc["servings"];
 
-    JsonArray tanks    = doc["tanks"];
+    JsonArray tanks    = doc["ingredients"];
     float totalPercent = 0;
     for (JsonObject tank : tanks) {
         totalPercent += tank["percentage"].as<float>();
     }
 
     if (abs(totalPercent - 100.0) > 0.1) {
+        ESP_LOGI(TAG, "_handleUpdateRecipe: Percentages must sum to 100 (got %.2f) for recipeId %d", totalPercent, recipeId);
         request->send(400, "application/json", "{\"error\":\"Percentages must sum to 100\"}");
         return;
     }
@@ -936,7 +967,7 @@ void WebServer::_handleUpdateRecipe(AsyncWebServerRequest* request, JsonDocument
     recipe.ingredients.clear();
     for (JsonObject tank : tanks) {
         RecipeIngredient ing;
-        ing.tankUid    = tank["tankUid"].as<std::uint64_t>();
+        ing.tankUid    = hexStrToU64(tank["tankUid"].as<String>());
         ing.percentage = tank["percentage"].as<float>();
         recipe.ingredients.push_back(ing);
     }
@@ -944,6 +975,7 @@ void WebServer::_handleUpdateRecipe(AsyncWebServerRequest* request, JsonDocument
     if (_recipeProcessor.updateRecipe(recipe)) {
         request->send(200, "application/json", "{\"success\":true}");
     } else {
+        ESP_LOGI(TAG, "_handleUpdateRecipe: Recipe not found for recipeId %d", recipeId);
         request->send(404, "application/json", "{\"error\":\"Recipe not found\"}");
     }
 }

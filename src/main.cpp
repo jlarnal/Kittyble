@@ -225,6 +225,11 @@ void loop()
                     }
                 }
 #endif
+                break;
+            case 't':
+            case 'T':
+                tankManager.printConnectedTanks(Serial);
+                break;
             default:
                 break;
         }

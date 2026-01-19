@@ -125,9 +125,8 @@ The system tracks weight stability to ensure accurate readings during dispensing
 
 ```json
 {
-  "id": "string",
+  "id": 1,
   "name": "string",
-  "enabled": true,
   "ingredients": [
     {
       "tankUid": "string",
@@ -140,8 +139,8 @@ The system tracks weight stability to ensure accurate readings during dispensing
   ],
   "dailyWeight": 200,
   "servings": 2,
-  "createdAt": "timestamp",
-  "lastUsedAt": "timestamp"
+  "created": "timestamp",
+  "lastUsed": "timestamp"
 }
 ```
 
@@ -210,6 +209,7 @@ Dedicated FreeRTOS task runs at 10 Hz (priority 10) performing continuous safety
 | Service | Port | Description |
 |---------|------|-------------|
 | HTTP REST API | 80 | Primary control interface |
+| Server-Sent Events | 80 | Real-time push notifications (`/api/events`) |
 | mDNS | 5353 | Device discovery (kibblet5.local) |
 | OTA Updates | 3232 | ArduinoOTA protocol |
 | NTP | 123 | Time synchronization |
@@ -285,6 +285,44 @@ Dedicated FreeRTOS task runs at 10 Hz (priority 10) performing continuous safety
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | POST | `/api/update` | HTTP OTA firmware upload |
+
+### 8.9 Server-Sent Events (SSE) Endpoint
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/events` | SSE stream for real-time notifications |
+
+The SSE endpoint provides a persistent HTTP connection for server-initiated push notifications. Clients subscribe by opening an `EventSource` connection.
+
+#### Event Types
+
+| Event | Trigger | Payload |
+|-------|---------|---------|
+| `tanks_changed` | Tank population changes (connect/disconnect) | `{}` |
+| `status_changed` | System state transition | `{state: string}` |
+| `feeding_progress` | Weight update during feeding | `{weight: number, target: number}` |
+| `feeding_complete` | Feeding operation finished | `{success: boolean, dispensed: number}` |
+| `error` | Error condition detected | `{code: string, message: string}` |
+
+#### Message Format
+
+```
+event: tanks_changed
+data: {}
+
+event: status_changed
+data: {"state": "FEEDING"}
+
+event: feeding_progress
+data: {"weight": 45.2, "target": 100}
+```
+
+#### Implementation Notes
+
+- Uses `AsyncEventSource` from ESPAsyncWebServer library
+- Heartbeat sent every 30 seconds to maintain connection
+- Clients should implement reconnection on disconnect
+- Maximum concurrent connections: 4 (ESP32 memory constraint)
 
 ---
 
@@ -544,26 +582,11 @@ The following areas are identified for potential enhancement:
 
 ```json
 {
+  "battery": 72,
   "state": "IDLE",
-  "scale": {
-    "weight": 45.2,
-    "stable": true,
-    "responsive": true
-  },
-  "tanks": [
-    {
-      "uid": "A1B2C3D4E5F6G7H8",
-      "name": "Chicken Kibble"
-    }
-  ],
-  "battery": {
-    "voltage": 3850,
-    "percentage": 72
-  },
-  "wifi": {
-    "connected": true,
-    "rssi": -45
-  }
+  "lastFeedTime": "08:30",
+  "lastRecipe": "Morning Mix",
+  "error": ""
 }
 ```
 
@@ -580,7 +603,9 @@ The following areas are identified for potential enhancement:
     "density": 0.65,
     "calibration": {
       "idlePwm": 1500
-    }
+    },
+    "lastDispensed": 0,
+    "totalDispensed": 0
   }
 ]
 ```
@@ -589,17 +614,16 @@ The following areas are identified for potential enhancement:
 
 ```json
 {
-  "id": "recipe_001",
+  "id": 1,
   "name": "Morning Mix",
-  "enabled": true,
   "ingredients": [
     {"tankUid": "A1B2C3D4E5F6G7H8", "percentage": 70},
     {"tankUid": "H8G7F6E5D4C3B2A1", "percentage": 30}
   ],
   "dailyWeight": 150,
   "servings": 2,
-  "createdAt": "2026-01-10T08:00:00Z",
-  "lastUsedAt": "2026-01-14T07:30:00Z"
+  "created": "2026-01-10T08:00:00Z",
+  "lastUsed": "2026-01-14T07:30:00Z"
 }
 ```
 

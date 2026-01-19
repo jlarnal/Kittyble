@@ -136,27 +136,7 @@ struct DeviceState {
         return "IDLE";
     }
 
-    static void printTo(DeviceState& state, Stream& stream)
-    {
-        stream.printf("  Operational:           %s\r\n", state.operational ? "true" : "false");
-        stream.printf("  Operation State:      %s\r\n", state.getStateString());
-        stream.printf("  Last Error:           %s\r\n", state.lastError.c_str());
-        stream.printf("  Safety Mode Engaged:  %s\r\n", state.safetyModeEngaged ? "true" : "false");
-        stream.printf("  Uptime (s):           %u\r\n", state.uptime_s);
-        stream.printf("  WiFi Strength:        %d dBm\r\n", state.wifiStrength);
-        stream.printf("  Battery Level:        %u %%\r\n", state.batteryLevel);
-        stream.printf("  Last Feed Time:       %lld\r\n", state.lastFeedTime);
-        stream.printf("  Device Name:          %s\r\n", state.deviceName.c_str());
-        stream.printf("  Firmware Version:     %s\r\n", state.firmwareVersion.c_str());
-        stream.printf("  Build Date:           %s\r\n", state.buildDate.c_str());
-        stream.printf("  Current Time:         %s\r\n", state.formattedTime);
-        stream.printf("  Current Weight:       %.2f g\r\n", state.currentWeight);
-        stream.printf("  Raw Scale Value:      %ld\r\n", state.currentRawValue);
-        stream.printf("  Is Weight Stable:     %s\r\n", state.isWeightStable ? "true" : "false");
-        stream.printf("  Is Scale Responding:  %s\r\n", state.isScaleResponding ? "true" : "false");
-        stream.printf("  Servo Power:          %s\r\n", state.servoPower ? "true" : "false");
-        stream.flush();
-    }
+    static void printTo(DeviceState& state, Stream& stream);
 };
 
 extern DeviceState globalDeviceState;

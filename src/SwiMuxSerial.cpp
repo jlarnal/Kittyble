@@ -1,7 +1,7 @@
 #include "SwiMuxSerial.h"
 #include "SerialDebugger.hpp"
 
-//#define DEBUG_SWIMUX
+
 
 static const char* TAG = "SwiMuxSerial";
 

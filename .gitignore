@@ -5,6 +5,7 @@
 .vscode/ipch
 .vscode/settings.json
 .claude/*
+.*
 data
 gfx
 build

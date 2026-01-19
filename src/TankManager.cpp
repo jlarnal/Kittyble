@@ -188,7 +188,8 @@ void TankManager::_tankDetectionTask(void* pvParam)
     if (pvParam == nullptr)
         return;
     TankManager* pInst = (TankManager*)pvParam;
-    SwiMuxPresenceReport_t currReport;
+    RollCallArray_t currentUids;
+    bool changesDetected = false;
 
     // Task loop
     while (1) {
@@ -196,21 +197,43 @@ void TankManager::_tankDetectionTask(void* pvParam)
         // We try to take the mutex; if the SwiMux is busy, we just skip this cycle.
         if (!pInst->_isServoMode) {
             if (xSemaphoreTakeRecursive(pInst->_swimuxMutex, MUTEX_ACQUISITION_TIMEOUT) == pdTRUE) {
-                if (pInst->_swiMux.hasEvents(&currReport)) {
-                    uint16_t presenceChanges   = pInst->_lastPresenceReport.presences ^ currReport.presences;
-                    pInst->_lastPresenceReport = currReport;
+                if (pInst->_swiMux.rollCall(currentUids) == SMREZ_OK) {
+                    uint16_t changedBuses = 0;
 
-                    if (presenceChanges != 0) {
+                    // Compare each bus's UID against the previously known population.
+                    for (int i = 0; i < NUMBER_OF_BUSES; i++) {
+                        // Normalize: UINT64_MAX (no device) and 0 both mean "empty bus"
+                        uint64_t currUid = (currentUids.bus[i] == UINT64_MAX) ? 0 : currentUids.bus[i];
+                        uint64_t prevUid = (pInst->_lastKnownUids.bus[i] == UINT64_MAX) ? 0 : pInst->_lastKnownUids.bus[i];
+
+                        if (currUid != prevUid) {
+                            changedBuses |= (1 << i);
+                        }
+                        // Update stored UID (store the normalized value)
+                        pInst->_lastKnownUids.bus[i] = currUid;
+                    }
+
+                    if (changedBuses != 0) {
+                        changesDetected = true;
+                        ESP_LOGI(TAG, "Tank population change detected on buses: 0x%02X", changedBuses);
                         // We are already holding the mutex, but refresh() expects to take it.
                         // Since it's a recursive mutex, this is fine.
-                        pInst->refresh(presenceChanges);
+                        pInst->refresh(changedBuses);
+                        // Notify listeners (e.g., WebServer SSE) of tank population change.
+                        if (pInst->_onTanksChangedCallback) {
+                            pInst->_onTanksChangedCallback();
+                        }
                     }
                 }
                 xSemaphoreGiveRecursive(pInst->_swimuxMutex);
             }
         }
         // Poll every second.
-        vTaskDelay(pdMS_TO_TICKS(1000));
+        if (changesDetected) {
+            vTaskDelay(pdMS_TO_TICKS(3000));
+        } else {
+            vTaskDelay(pdMS_TO_TICKS(1000));
+        }
     }
 }
 
@@ -237,8 +260,8 @@ bool TankInfo::fillFromEeprom(TankEEpromData_t& eeprom)
     kibbleDensity  = TankManager::q2_14_to_double(eeprom.data.density);
     // Remaining kibble (in kg in TankInfo, in 16-bits integer grams in eeprom)
     remaining_weight_kg = eeprom.data.remainingGrams * 1E-3;
-    servoIdlePwm = eeprom.data.servoIdlePwm;
-    isFullInfo   = true;
+    servoIdlePwm        = eeprom.data.servoIdlePwm;
+    isFullInfo          = true;
     return true;
 }
 
@@ -275,7 +298,7 @@ TankInfo::TankInfoDiscrepancies_e TankInfo::toTankData(TankEEpromData_t& eeprom)
         eeprom.data.density      = qDens;
     }
     // Remaining kibble (in grams in eeprom, in kg in TankInfo)
-    uint32_t tankRemGrams = (uint32_t)std::abs(remaining_weight_kg * 1E-3);
+    uint32_t tankRemGrams = (uint32_t)std::abs(remaining_weight_kg * 1E3);
     if (eeprom.data.remainingGrams != tankRemGrams) {
         result |= TID_REMAINING_CHANGED;
         eeprom.data.remainingGrams = tankRemGrams;
@@ -806,6 +829,58 @@ PCA9685::I2C_Result_e TankManager::stopAllServos()
     return result;
 }
 
+void TankManager::setOnTanksChangedCallback(std::function<void()> cb)
+{
+    _onTanksChangedCallback = cb;
+}
+
+void TankManager::printConnectedTanks(Stream& stream)
+{
+    stream.println("=== CONNECTED TANKS ===");
+    stream.println();
+
+    if (_knownTanks.empty()) {
+        stream.println("  (no tanks connected)");
+        stream.println();
+        stream.println("=== END TANKS ===");
+        return;
+    }
+
+    stream.printf("  Total: %d tank(s)\r\n", (int)_knownTanks.size());
+    stream.println();
+
+    for (size_t i = 0; i < _knownTanks.size(); i++) {
+        const TankInfo& tank = _knownTanks[i];
+        stream.printf("--- Tank %d ---\r\n", (int)i);
+        stream.printf("  UID:              %016llX\r\n", (unsigned long long)tank.uid);
+        stream.printf("  Name:             %s\r\n", tank.name.c_str());
+        stream.printf("  Bus Index:        %d\r\n", (int)tank.busIndex);
+        stream.printf("  Full Info:        %s\r\n", tank.isFullInfo ? "yes" : "no");
+
+        if (tank.isFullInfo) {
+            stream.printf("  Capacity:         %.3f L\r\n", tank.capacityLiters);
+            stream.printf("  Density:          %.3f kg/L\r\n", tank.kibbleDensity);
+            stream.printf("  Remaining:        %.3f kg (%.0f g)\r\n", tank.remaining_weight_kg, tank.remaining_weight_kg * 1000.0);
+            stream.printf("  Servo Idle PWM:   %u\r\n", tank.servoIdlePwm);
+
+            // Calculate and show fill percentage if capacity is set
+            if (tank.capacityLiters > 0 && tank.kibbleDensity > 0) {
+                double maxKg = tank.capacityLiters * tank.kibbleDensity;
+                double fillPercent = (tank.remaining_weight_kg / maxKg) * 100.0;
+                stream.printf("  Fill Level:       %.1f%%\r\n", fillPercent);
+            }
+
+            // Show last connected base MAC
+            stream.printf("  Last Base MAC:    %02X:%02X:%02X:%02X:%02X:%02X\r\n",
+                tank.lastBaseMAC48[0], tank.lastBaseMAC48[1], tank.lastBaseMAC48[2],
+                tank.lastBaseMAC48[3], tank.lastBaseMAC48[4], tank.lastBaseMAC48[5]);
+        }
+        stream.println();
+        stream.flush();
+    }
+
+    stream.println("=== END TANKS ===");
+}
 
 #pragma region Test methods for debug, to be commented out upon release
 

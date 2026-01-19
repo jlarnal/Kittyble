@@ -164,10 +164,10 @@ void HX711Scale::_scaleTask(void* pvParameters)
 #if defined(PRINT_SCALE_STATUS) && !defined(LOG_TO_SPIFFS)
         if (!reports--) {
             if (instance->_deviceState.isScaleResponding != false) {
-                Serial.printf("Scale status: %s, %fg (%d)\r\n", (instance->_deviceState.isWeightStable ? "stable" : "unstable"),
+                ESP_LOGI(TAG,"Scale status: %s, %fg (%d)\r\n", (instance->_deviceState.isWeightStable ? "stable" : "unstable"),
                   instance->_deviceState.currentWeight, instance->_deviceState.currentRawValue);
             } else {
-                Serial.print("Scale status: UNRESPONSIVE !\r\n");
+                ESP_LOGW(TAG,"Scale status: UNRESPONSIVE !\r\n");
             }
             reports = SCALE_REPORTS_PERIOD;
         }

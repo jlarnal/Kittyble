@@ -26,6 +26,7 @@ class WebServer {
 
   private:
     AsyncWebServer _server;
+    AsyncEventSource _events;
     DNSServer _dnsServer;
     DeviceState& _deviceState;
     SemaphoreHandle_t& _mutex;
