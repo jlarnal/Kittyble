@@ -7,7 +7,7 @@
 
 static const char* TAG = "ConfigManager";
 
-const Recipe Recipe::EMPTY = { 0, "no recipe", std::vector<RecipeIngredient>(), 0, 0, 0.0, 0, false };
+const Recipe Recipe::EMPTY = { 0U, "no recipe", std::vector<RecipeIngredient>(), 0, 0, 0.0, 0, false };
 
 ConfigManager::ConfigManager(const char* nvs_namespace) : _namespace(nvs_namespace), _nvs_handle(0) {}
 
@@ -241,7 +241,7 @@ bool ConfigManager::_loadRecipeFile(const char* path, std::vector<Recipe>& recip
     recipes.clear();
     for (JsonObject recipeObj : recipesArray) {
         Recipe recipe;
-        recipe.id          = recipeObj["id"].as<int>();
+        recipe.uid         = recipeObj["uid"].as<uint32_t>();
         recipe.name        = recipeObj["name"].as<std::string>();
         recipe.dailyWeight = recipeObj["dailyWeight"] | 0.0;
         recipe.servings    = recipeObj["servings"] | 1;
@@ -277,7 +277,7 @@ std::vector<Recipe> ConfigManager::_loadRecipesFromNVS_Legacy()
                 JsonArray array = doc.as<JsonArray>();
                 for (JsonObject recipeObj : array) {
                     Recipe recipe;
-                    recipe.id          = recipeObj["id"].as<int>();
+                    recipe.uid         = recipeObj["id"].as<uint32_t>();  // Legacy: read "id" as uid
                     recipe.name        = recipeObj["name"].as<std::string>();
                     recipe.dailyWeight = recipeObj["dailyWeight"] | 0.0;
                     recipe.servings    = recipeObj["servings"] | 1;
@@ -324,7 +324,7 @@ bool ConfigManager::saveRecipes(const std::vector<Recipe>& recipes)
 
     for (const auto& recipe : recipes) {
         JsonObject recipeObj     = array.add<JsonObject>();
-        recipeObj["id"]          = recipe.id;
+        recipeObj["uid"]         = recipe.uid;
         recipeObj["name"]        = recipe.name;
         recipeObj["dailyWeight"] = recipe.dailyWeight;
         recipeObj["servings"]    = recipe.servings;

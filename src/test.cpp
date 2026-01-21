@@ -315,7 +315,7 @@ void doReadTest(TankManager& tankManager, int busIndex)
     Serial.printf("\r\nAttempting to read 128 bytes from offset 0 on device #%d...", busIndex);
     uint32_t endTime, startTime;
     startTime                = micros();
-    SwiMuxSerialResult_e res = tankManager.testSwiRead(busIndex, 0, buff, 128);
+    SwiMuxSerialResult_e res = tankManager.swiRead(busIndex, 0, buff, 128);
     endTime                  = micros();
     if (res != SwiMuxSerialResult_e::SMREZ_OK) {
         Serial.printf("FAILED !!!\r\nRead error: %d\r\n", SwiMuxSerial_t::getSwiMuxErrorString(res));
@@ -348,7 +348,7 @@ void doWriteTest(TankManager& tankManager, int busIndex)
 
 
     Serial.print("Starting write test:\r\n • reading initial content: ");
-    res = tankManager.testSwiRead(busIndex, 0, initial_contents, 128);
+    res = tankManager.swiRead(busIndex, 0, initial_contents, 128);
     if (res != SMREZ_OK) {
         Serial.printf("FAILED (%s)!!\r\n", SwiMuxSerial_t::getSwiMuxErrorString(res));
         goto EndOfDoWriteTest;
@@ -375,7 +375,7 @@ void doWriteTest(TankManager& tankManager, int busIndex)
     }
 
     Serial.print("ok (none)\r\n • first readback from mem: ");
-    res = tankManager.testSwiRead(busIndex, 0, (uint8_t*)dest, LOREM_LENGTH);
+    res = tankManager.swiRead(busIndex, 0, (uint8_t*)dest, LOREM_LENGTH);
     if (res != SMREZ_OK) {
         Serial.printf("FAILED (%s)!!\r\n", SwiMuxSerial_t::getSwiMuxErrorString(res));
         goto EndOfDoWriteTest;
@@ -421,7 +421,7 @@ void doWriteTest(TankManager& tankManager, int busIndex)
 
     memset(dest, 0, LOREM_LENGTH);
     Serial.print("Done\r\n • second readback ");
-    res = tankManager.testSwiRead(busIndex, 0, (uint8_t*)dest, LOREM_LENGTH);
+    res = tankManager.swiRead(busIndex, 0, (uint8_t*)dest, LOREM_LENGTH);
     if (res != SMREZ_OK) {
         Serial.printf("FAILED (%s)!!\r\n", SwiMuxSerial_t::getSwiMuxErrorString(res));
         goto EndOfDoWriteTest;
@@ -788,7 +788,7 @@ void swiMuxMenu(TankManager& tankManager)
                                     break;
                                 }
                                 Serial.println();
-                                SwiMuxSerialResult_e res = tankManager.testFormat(busIndex);
+                                SwiMuxSerialResult_e res = tankManager.formatTank(busIndex);
                                 if (res == SwiMuxSerialResult_e::SMREZ_OK) {
                                     Serial.printf("\r\nFormatting on bus #%d successful.\r\n", busIndex);
                                 } else if (res == SwiMuxSerialResult_e::SMREZ_MutexAcquisition) { // mutex acquisition failed.

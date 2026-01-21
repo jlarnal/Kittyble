@@ -318,7 +318,7 @@ void WebServer::_setupAPIRoutes()
     _server.on("/api/status", HTTP_GET, std::bind(&WebServer::_handleGetStatus, this, std::placeholders::_1));
 
     _server.on("/api/system/info", HTTP_GET, std::bind(&WebServer::_handleGetSystemInfo, this, std::placeholders::_1));
-    _server.on("/api/system/restart", HTTP_POST, std::bind(&WebServer::_handleRestart, this, std::placeholders::_1));
+    _server.on("/api/system/reboot", HTTP_POST, std::bind(&WebServer::_handleRestart, this, std::placeholders::_1));
     _server.on("/api/system/factory-reset", HTTP_POST, std::bind(&WebServer::_handleFactoryReset, this, std::placeholders::_1));
     _server.on(
       "/api/system/time", HTTP_POST, [this](AsyncWebServerRequest* r) {}, NULL,
@@ -566,7 +566,7 @@ void WebServer::_handleExportSettings(AsyncWebServerRequest* request)
     JsonArray recipes = doc["recipes"].to<JsonArray>();
     for (const auto& recipe : _recipeProcessor.getRecipes()) {
         JsonObject recipeObj     = recipes.add<JsonObject>();
-        recipeObj["id"]          = recipe.id;
+        recipeObj["uid"]         = recipe.uid;
         recipeObj["name"]        = recipe.name;
         recipeObj["dailyWeight"] = recipe.dailyWeight;
         recipeObj["servings"]    = recipe.servings;
@@ -592,9 +592,9 @@ void WebServer::_handleGetTanks(AsyncWebServerRequest* request)
             tankObj["uid"]             = hexUid;
             tankObj["name"]            = tank.name;
             tankObj["busIndex"]        = tank.busIndex;
-            tankObj["remainingWeight"] = tank.remaining_weight_kg;
+            tankObj["remainingWeightGrams"] = tank.remaining_weight_grams;
             tankObj["capacity"]        = tank.capacityLiters;
-            tankObj["density"]         = tank.kibbleDensity;
+            tankObj["density"]         = tank.kibbleDensity * 1000.0;  // Internal kg/L to API g/L
             JsonObject calib           = tankObj["calibration"].to<JsonObject>();
             calib["idlePwm"]           = tank.servoIdlePwm;
 
@@ -638,16 +638,22 @@ void WebServer::_handleUpdateTank(AsyncWebServerRequest* request, JsonDocument& 
     if (!doc["name"].isNull()) {
         tankToUpdate.name = doc["name"].as<std::string>();
     }
-    if (!doc["remainingWeight"].isNull()) {
-        tankToUpdate.remaining_weight_kg = doc["remainingWeight"].as<double>();
+    if (!doc["remainingWeightGrams"].isNull()) {
+        double weightGrams = doc["remainingWeightGrams"].as<double>();
+        if (weightGrams < 0.0 || weightGrams > 65535.0) {
+            request->send(400, "application/json",
+                "{\"error\":\"remainingWeightGrams must be between 0 and 65535 grams\"}");
+            return;
+        }
+        tankToUpdate.remaining_weight_grams = weightGrams;  // API grams to internal kg
     }
     if (!doc["capacity"].isNull()) {
         tankToUpdate.capacityLiters = doc["capacity"].as<double>();
     }
     if (!doc["density"].isNull()) {
-        tankToUpdate.kibbleDensity = doc["density"].as<double>();
+        tankToUpdate.kibbleDensity = doc["density"].as<double>() / 1000.0;  // API g/L to internal kg/L
     } else if (!doc["kibbleDensity"].isNull()) {
-        tankToUpdate.kibbleDensity = doc["kibbleDensity"].as<double>();
+        tankToUpdate.kibbleDensity = doc["kibbleDensity"].as<double>() / 1000.0;  // API g/L to internal kg/L
     }
 
     // Handle nested calibration object
@@ -664,8 +670,8 @@ void WebServer::_handleUpdateTank(AsyncWebServerRequest* request, JsonDocument& 
     if (_tankManager.commitTankInfo(tankToUpdate)) {
         request->send(200, "application/json", "{\"success\":true}");
         // Print updated tank info for debugging using ESP_LOGI
-        ESP_LOGI(TAG, "Tank %llX updated: name=%s, remainingWeight=%.2f kg, capacity=%.2f L, kibbleDensity=%.2f kg/L, servoIdlePwm=%d",
-          (unsigned long long)tankToUpdate.uid, tankToUpdate.name.c_str(), tankToUpdate.remaining_weight_kg, tankToUpdate.capacityLiters,
+        ESP_LOGI(TAG, "Tank %llX updated: name=%s, remainingWeightGrams=%.2fg, capacity=%.2f L, kibbleDensity=%.2f kg/L, servoIdlePwm=%d",
+          (unsigned long long)tankToUpdate.uid, tankToUpdate.name.c_str(), tankToUpdate.remaining_weight_grams, tankToUpdate.capacityLiters,
           tankToUpdate.kibbleDensity, tankToUpdate.servoIdlePwm);
     } else {
         // This could fail if the tank was disconnected between the check and the commit.
@@ -686,7 +692,7 @@ void WebServer::_handleGetTankHistory(AsyncWebServerRequest* request)
             JsonObject entryObj    = historyArray.add<JsonObject>();
             entryObj["timestamp"]  = entry.timestamp;
             entryObj["amount"]     = entry.amount;
-            entryObj["recipeId"]   = entry.recipeId;
+            entryObj["recipeUid"]  = entry.recipeUid;
             entryObj["recipeName"] = entry.description;
         }
         xSemaphoreGive(_mutex);
@@ -731,18 +737,18 @@ void WebServer::_handleFeedImmediate(AsyncWebServerRequest* request, JsonDocumen
 
 void WebServer::_handleFeedRecipe(AsyncWebServerRequest* request, JsonDocument& doc)
 {
-    int recipeId = request->pathArg(0).toInt();
+    uint32_t recipeUid = (uint32_t)request->pathArg(0).toInt();
     int servings = doc["servings"] | 1; // Default to 1 serving if not provided
 
-    if (recipeId <= 0) {
-        request->send(400, "application/json", "{\"error\":\"Invalid recipeId\"}");
+    if (recipeUid == 0) {
+        request->send(400, "application/json", "{\"error\":\"Invalid recipeUid\"}");
         return;
     }
 
     if (xSemaphoreTake(_mutex, pdMS_TO_TICKS(1000)) == pdTRUE) {
         if (_deviceState.feedCommand.processed) {
             _deviceState.feedCommand.type      = FeedCommandType::RECIPE;
-            _deviceState.feedCommand.recipeId  = recipeId;
+            _deviceState.feedCommand.recipeUid = recipeUid;
             _deviceState.feedCommand.servings  = servings;
             _deviceState.feedCommand.processed = false;
             request->send(202, "application/json", "{\"success\":true, \"message\":\"Recipe feed command accepted\"}");
@@ -776,8 +782,8 @@ void WebServer::_handleGetFeedingHistory(AsyncWebServerRequest* request)
             JsonObject entryObj   = historyArray.add<JsonObject>();
             entryObj["timestamp"] = entry.timestamp;
             entryObj["type"]      = entry.type;
-            if (entry.recipeId != -1) {
-                entryObj["recipeId"] = entry.recipeId;
+            if (entry.recipeUid != 0) {
+                entryObj["recipeUid"] = entry.recipeUid;
             }
             entryObj["success"] = entry.success;
             entryObj["amount"]  = entry.amount;
@@ -854,7 +860,7 @@ void WebServer::_handleGetRecipes(AsyncWebServerRequest* request)
     JsonArray recipesArray = doc.to<JsonArray>();
     for (const auto& recipe : recipes) {
         JsonObject recipeObj     = recipesArray.add<JsonObject>();
-        recipeObj["id"]          = recipe.id;
+        recipeObj["uid"]         = recipe.uid;
         recipeObj["name"]        = recipe.name;
         recipeObj["dailyWeight"] = recipe.dailyWeight;
         recipeObj["servings"]    = recipe.servings;
@@ -933,18 +939,18 @@ void WebServer::_handleUpdateRecipe(AsyncWebServerRequest* request, JsonDocument
     }
 #endif
 
-    int recipeId = request->pathArg(0).toInt();
-    if (recipeId <= 0) {
-        ESP_LOGI(TAG, "_handleUpdateRecipe: Invalid recipeId %d", recipeId);
-        request->send(400, "application/json", "{\"error\":\"Invalid recipeId\"}");
+    uint32_t recipeUid = (uint32_t)request->pathArg(0).toInt();
+    if (recipeUid == 0) {
+        ESP_LOGI(TAG, "_handleUpdateRecipe: Invalid recipeUid %u", recipeUid);
+        request->send(400, "application/json", "{\"error\":\"Invalid recipeUid\"}");
         return;
     }
 
     Recipe recipe;
-    recipe.id   = recipeId;
+    recipe.uid  = recipeUid;
     recipe.name = doc["name"].as<std::string>();
     if (recipe.name.empty()) {
-        ESP_LOGI(TAG, "_handleUpdateRecipe: Recipe name is required for recipeId %d", recipeId);
+        ESP_LOGI(TAG, "_handleUpdateRecipe: Recipe name is required for recipeUid %u", recipeUid);
         request->send(400, "application/json", "{\"error\":\"Recipe name is required\"}");
         return;
     }
@@ -959,7 +965,7 @@ void WebServer::_handleUpdateRecipe(AsyncWebServerRequest* request, JsonDocument
     }
 
     if (abs(totalPercent - 100.0) > 0.1) {
-        ESP_LOGI(TAG, "_handleUpdateRecipe: Percentages must sum to 100 (got %.2f) for recipeId %d", totalPercent, recipeId);
+        ESP_LOGI(TAG, "_handleUpdateRecipe: Percentages must sum to 100 (got %.2f) for recipeUid %u", totalPercent, recipeUid);
         request->send(400, "application/json", "{\"error\":\"Percentages must sum to 100\"}");
         return;
     }
@@ -975,20 +981,20 @@ void WebServer::_handleUpdateRecipe(AsyncWebServerRequest* request, JsonDocument
     if (_recipeProcessor.updateRecipe(recipe)) {
         request->send(200, "application/json", "{\"success\":true}");
     } else {
-        ESP_LOGI(TAG, "_handleUpdateRecipe: Recipe not found for recipeId %d", recipeId);
+        ESP_LOGI(TAG, "_handleUpdateRecipe: Recipe not found for recipeUid %u", recipeUid);
         request->send(404, "application/json", "{\"error\":\"Recipe not found\"}");
     }
 }
 
 void WebServer::_handleDeleteRecipe(AsyncWebServerRequest* request)
 {
-    int recipeId = request->pathArg(0).toInt();
-    if (recipeId <= 0) {
-        request->send(400, "application/json", "{\"error\":\"Invalid recipeId\"}");
+    uint32_t recipeUid = (uint32_t)request->pathArg(0).toInt();
+    if (recipeUid == 0) {
+        request->send(400, "application/json", "{\"error\":\"Invalid recipeUid\"}");
         return;
     }
 
-    if (_recipeProcessor.deleteRecipe(recipeId)) {
+    if (_recipeProcessor.deleteRecipe(recipeUid)) {
         request->send(200, "application/json", "{\"success\":true}");
     } else {
         request->send(404, "application/json", "{\"error\":\"Recipe not found\"}");
@@ -1015,7 +1021,7 @@ void WebServer::_handleGetSensorDiagnostics(AsyncWebServerRequest* request)
         for (const auto& tank : _deviceState.connectedTanks) {
             JsonObject tankLevel         = tankLevels.add<JsonObject>();
             tankLevel["uid"]             = tank.uid;
-            tankLevel["remainingWeight"] = tank.remaining_weight_kg;
+            tankLevel["remainingWeightGrams"] = tank.remaining_weight_grams;
             tankLevel["sensorType"]      = "estimation";
         }
         xSemaphoreGive(_mutex);

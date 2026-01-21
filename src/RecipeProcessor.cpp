@@ -36,7 +36,7 @@ bool RecipeProcessor::executeImmediateFeed(const uint64_t tankUid, float targetW
 
     // Log the immediate feeding event
     if (xSemaphoreTake(_mutex, portMAX_DELAY) == pdTRUE) {
-        FeedingHistoryEntry entry(time(nullptr), "immediate", -1, success, targetWeight, "Immediate Feed");
+        FeedingHistoryEntry entry(time(nullptr), "immediate", 0, success, targetWeight, "Immediate Feed");
         _deviceState.feedingHistory.push_back(entry);
         xSemaphoreGive(_mutex);
     }
@@ -44,12 +44,12 @@ bool RecipeProcessor::executeImmediateFeed(const uint64_t tankUid, float targetW
     return success;
 }
 
-bool RecipeProcessor::executeRecipeFeed(int recipeId, int servings)
+bool RecipeProcessor::executeRecipeFeed(uint32_t recipeUid, int servings)
 {
-    auto it = std::find_if(_recipes.begin(), _recipes.end(), [recipeId](const Recipe& r) { return r.id == recipeId; });
+    auto it = std::find_if(_recipes.begin(), _recipes.end(), [recipeUid](const Recipe& r) { return r.uid == recipeUid; });
 
     if (it == _recipes.end()) {
-        ESP_LOGE(TAG, "Recipe feed failed: Recipe with ID %d not found.", recipeId);
+        ESP_LOGE(TAG, "Recipe feed failed: Recipe with UID %u not found.", recipeUid);
         if (xSemaphoreTake(_mutex, portMAX_DELAY) == pdTRUE) {
             _deviceState.lastError = "Recipe not found.";
             xSemaphoreGive(_mutex);
@@ -111,7 +111,7 @@ bool RecipeProcessor::executeRecipeFeed(int recipeId, int servings)
 
     // Log the feeding event, whether it succeeded or failed
     if (xSemaphoreTake(_mutex, portMAX_DELAY) == pdTRUE) {
-        FeedingHistoryEntry entry(time(nullptr), "recipe", recipe.id, overallSuccess, totalDispensed, recipe.name);
+        FeedingHistoryEntry entry(time(nullptr), "recipe", recipe.uid, overallSuccess, totalDispensed, recipe.name);
         _deviceState.feedingHistory.push_back(entry);
         xSemaphoreGive(_mutex);
     }
@@ -190,6 +190,7 @@ void RecipeProcessor::stopAllFeeding()
 void RecipeProcessor::_loadRecipesFromNVS()
 {
     _recipes = _configManager.loadRecipes();
+    _deviceState.storedRecipes = _recipes;
 }
 
 void RecipeProcessor::_saveRecipesToNVS()
@@ -199,50 +200,53 @@ void RecipeProcessor::_saveRecipesToNVS()
 
 bool RecipeProcessor::addRecipe(const Recipe& recipe)
 {
-    int maxId = 0;
+    uint32_t maxUid = 0;
     for (const auto& r : _recipes) {
-        if (r.id > maxId)
-            maxId = r.id;
+        if (r.uid > maxUid)
+            maxUid = r.uid;
     }
     Recipe newRecipe   = recipe;
-    newRecipe.id       = maxId + 1;
+    newRecipe.uid      = maxUid + 1;
     newRecipe.created  = time(nullptr); // Set creation timestamp
     newRecipe.lastUsed = 0; // Initialize lastUsed to 0
     _recipes.push_back(newRecipe);
     _saveRecipesToNVS();
-    ESP_LOGI(TAG, "Added new recipe '%s' with ID %d", newRecipe.name.c_str(), newRecipe.id);
+    _deviceState.storedRecipes = _recipes;
+    ESP_LOGI(TAG, "Added new recipe '%s' with UID %u", newRecipe.name.c_str(), newRecipe.uid);
     return true;
 }
 
 bool RecipeProcessor::updateRecipe(const Recipe& recipe)
 {
     for (auto& r : _recipes) {
-        if (r.id == recipe.id) {
+        if (r.uid == recipe.uid) {
             r.name        = recipe.name;
             r.ingredients = recipe.ingredients;
             r.dailyWeight = recipe.dailyWeight;
             r.servings    = recipe.servings;
             r.lastUsed    = time(nullptr); // Update last used timestamp on modification
             _saveRecipesToNVS();
-            ESP_LOGI(TAG, "Updated recipe '%s' (ID %d)", r.name.c_str(), r.id);
+            _deviceState.storedRecipes = _recipes;
+            ESP_LOGI(TAG, "Updated recipe '%s' (UID %u)", r.name.c_str(), r.uid);
             return true;
         }
     }
-    ESP_LOGW(TAG, "Could not find recipe with ID %d to update.", recipe.id);
+    ESP_LOGW(TAG, "Could not find recipe with UID %u to update.", recipe.uid);
     return false;
 }
 
-bool RecipeProcessor::deleteRecipe(int recipeId)
+bool RecipeProcessor::deleteRecipe(uint32_t recipeUid)
 {
-    auto it = std::remove_if(_recipes.begin(), _recipes.end(), [recipeId](const Recipe& r) { return r.id == recipeId; });
+    auto it = std::remove_if(_recipes.begin(), _recipes.end(), [recipeUid](const Recipe& r) { return r.uid == recipeUid; });
 
     if (it != _recipes.end()) {
         _recipes.erase(it, _recipes.end());
         _saveRecipesToNVS();
-        ESP_LOGI(TAG, "Deleted recipe with ID %d", recipeId);
+        _deviceState.storedRecipes = _recipes;
+        ESP_LOGI(TAG, "Deleted recipe with UID %u", recipeUid);
         return true;
     }
-    ESP_LOGW(TAG, "Could not find recipe with ID %d to delete.", recipeId);
+    ESP_LOGW(TAG, "Could not find recipe with UID %u to delete.", recipeUid);
     return false;
 }
 
@@ -251,12 +255,12 @@ std::vector<Recipe> RecipeProcessor::getRecipes()
     return _recipes;
 }
 
-Recipe RecipeProcessor::getRecipeById(int recipeId)
+Recipe RecipeProcessor::getRecipeByUid(uint32_t recipeUid)
 {
     for (const auto& r : _recipes) {
-        if (r.id == recipeId) {
+        if (r.uid == recipeUid) {
             return r;
         }
     }
-    return { -1, "Not Found", {}, 0, 0, 0, 0 }; // Return a valid but 'not found' recipe
+    return { 0, "Not Found", {}, 0, 0, 0, 0, false }; // Return a valid but 'not found' recipe
 }

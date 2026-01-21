@@ -26,18 +26,21 @@ bool HX711Scale::begin(uint8_t dataPin, uint8_t clockPin)
 void HX711Scale::tare()
 {
     // Tare takes a fixed number of samples (20), so we can calculate a generous timeout.
-    TickType_t timeout = pdMS_TO_TICKS(20 * FAST_MODE_SAMPLING_PERIOD_MS + 100);
+    TickType_t timeout = pdMS_TO_TICKS(20 * FAST_MODE_SAMPLING_PERIOD_MS + 150);
 
     if (xSemaphoreTake(_scaleMutex, timeout) == pdTRUE) {
         ESP_LOGI(TAG, "Taring scale...");
+        // Ensure HX711 is powered up for blocking read
+        _scale.power_up();
+        vTaskDelay(pdMS_TO_TICKS(55)); // Wait for settling
         if (_scale.tare(20)) {
             _zeroOffset = _scale.get_offset();
-            xSemaphoreGive(_scaleMutex);
             ESP_LOGI(TAG, "Tare complete. New offset: %ld", _zeroOffset);
             saveCalibration();
         } else {
             ESP_LOGE(TAG, "Tare failed due to unresponsiveness of the HX711.");
         }
+        xSemaphoreGive(_scaleMutex);
     } else {
         ESP_LOGE(TAG, "Failed to acquire scale mutex for tare().");
     }
@@ -46,11 +49,13 @@ void HX711Scale::tare()
 float HX711Scale::getWeight()
 {
     float weight       = 0.0f;
-    uint8_t samples    = _deviceState.Settings.getScaleSamplesCount() > 0 ? _deviceState.Settings.getScaleSamplesCount() : 1;
-    TickType_t timeout = pdMS_TO_TICKS(samples * FAST_MODE_SAMPLING_PERIOD_MS + 50);
+    TickType_t timeout = pdMS_TO_TICKS(CALIBRATION_SAMPLES * FAST_MODE_SAMPLING_PERIOD_MS + 50);
     uint8_t failures   = 0;
     if (xSemaphoreTake(_scaleMutex, timeout) == pdTRUE) {
-        weight = _scale.get_units(samples, failures);
+        // Ensure HX711 is powered up for blocking read
+        _scale.power_up();
+        vTaskDelay(pdMS_TO_TICKS(55)); // Wait for settling
+        weight = _scale.get_units(CALIBRATION_SAMPLES, failures);
         xSemaphoreGive(_scaleMutex);
     } else {
         ESP_LOGE(TAG, "Failed to acquire scale mutex for getWeight().");
@@ -63,11 +68,13 @@ float HX711Scale::getWeight()
 long HX711Scale::getRawReading()
 {
     long rawValue      = 0;
-    uint8_t samples    = _deviceState.Settings.getScaleSamplesCount() > 0 ? _deviceState.Settings.getScaleSamplesCount() : 1;
-    TickType_t timeout = pdMS_TO_TICKS(samples * FAST_MODE_SAMPLING_PERIOD_MS + 50);
+    TickType_t timeout = pdMS_TO_TICKS(CALIBRATION_SAMPLES * FAST_MODE_SAMPLING_PERIOD_MS + 50);
     uint8_t failures   = 0;
     if (xSemaphoreTake(_scaleMutex, timeout) == pdTRUE) {
-        rawValue = _scale.read_average(samples, failures);
+        // Ensure HX711 is powered up for blocking read
+        _scale.power_up();
+        vTaskDelay(pdMS_TO_TICKS(55)); // Wait for settling
+        rawValue = _scale.read_average(CALIBRATION_SAMPLES, failures);
         xSemaphoreGive(_scaleMutex);
     } else {
         ESP_LOGE(TAG, "Failed to acquire scale mutex for getRawReading().");
@@ -131,48 +138,121 @@ void HX711Scale::startTask()
 
 void HX711Scale::_scaleTask(void* pvParameters)
 {
-    constexpr uint32_t SCALE_SAMPLING_PERIOD_MS = 250; // 4Hz
-    constexpr size_t SCALE_REPORTS_PERIOD       = 5000 / SCALE_SAMPLING_PERIOD_MS;
-
     HX711Scale* instance = (HX711Scale*)pvParameters;
     ESP_LOGI(TAG, "Scale Task Started. Tare initiated.");
     instance->tare();
 
+    // Initialize state machine
+    instance->_state = ScaleState::SAMPLING;
+    instance->_rawSum = 0;
+    instance->_sampleCount = 0;
+    instance->_failureCount = 0;
+    instance->_tickCounter = 0;
+    instance->_idleTickCounter = 0;
+    instance->_settlingCounter = 0;
+    instance->_reportCounter = 0;
 
-#if defined(PRINT_SCALE_STATUS)
-    size_t reports = SCALE_REPORTS_PERIOD;
-#endif
     for (;;) {
-        // These calls are now thread-safe due to the internal mutex.
-        float current_weight = instance->getWeight();
-        long raw_value       = instance->getRawReading();
-        if (xSemaphoreTake(instance->_mutex, portMAX_DELAY) == pdTRUE) {
-            // This mutex protects the global device state, which is a different resource.
-            if (isnanf(current_weight)) {
-                instance->_deviceState.isWeightStable    = false;
-                instance->_deviceState.isScaleResponding = false;
-            } else {
-                instance->_deviceState.isWeightStable    = (abs(current_weight - instance->_deviceState.currentWeight) < 0.5);
-                instance->_deviceState.currentWeight     = current_weight;
-                instance->_deviceState.currentRawValue   = raw_value;
-                instance->_deviceState.isScaleResponding = true;                
-            }
-            xSemaphoreGive(instance->_mutex);
-        }
+        switch (instance->_state) {
+            case ScaleState::SAMPLING: {
+                // Timebase 1: collect samples at ~13ms intervals
+                if (xSemaphoreTake(instance->_scaleMutex, pdMS_TO_TICKS(5)) == pdTRUE) {
+                    if (instance->_scale.is_ready()) {
+                        long sample = instance->_scale.read();
+                        if (sample != 0) {
+                            instance->_rawSum += sample;
+                            instance->_sampleCount++;
+                        } else {
+                            instance->_failureCount++;
+                        }
+                    }
+                    xSemaphoreGive(instance->_scaleMutex);
+                }
+                instance->_tickCounter++;
 
+                // Timebase 2: After ~250ms worth of ticks, compute and publish averages
+                if (instance->_tickCounter >= TICKS_PER_AVERAGE) {
+                    if (xSemaphoreTake(instance->_mutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+                        if (instance->_sampleCount > 0) {
+                            long avgRaw = instance->_rawSum / instance->_sampleCount;
+                            float avgWeight = (float)(avgRaw - instance->_zeroOffset) / instance->_calibrationFactor;
 
+                            instance->_deviceState.isWeightStable = (abs(avgWeight - instance->_deviceState.currentWeight) < 0.5f);
+                            instance->_deviceState.currentWeight = avgWeight;
+                            instance->_deviceState.currentRawValue = avgRaw;
+                            instance->_deviceState.isScaleResponding = true;
+                        } else {
+                            // No valid samples collected
+                            instance->_deviceState.isWeightStable = false;
+                            instance->_deviceState.isScaleResponding = false;
+                        }
+                        xSemaphoreGive(instance->_mutex);
+                    }
+
+                    // Timebase 3: Report every 5s
+                    instance->_reportCounter++;
 #if defined(PRINT_SCALE_STATUS) && !defined(LOG_TO_SPIFFS)
-        if (!reports--) {
-            if (instance->_deviceState.isScaleResponding != false) {
-                ESP_LOGI(TAG,"Scale status: %s, %fg (%d)\r\n", (instance->_deviceState.isWeightStable ? "stable" : "unstable"),
-                  instance->_deviceState.currentWeight, instance->_deviceState.currentRawValue);
-            } else {
-                ESP_LOGW(TAG,"Scale status: UNRESPONSIVE !\r\n");
-            }
-            reports = SCALE_REPORTS_PERIOD;
-        }
+                    if (instance->_reportCounter >= REPORTS_PERIOD) {
+                        if (instance->_deviceState.isScaleResponding) {
+                            ESP_LOGI(TAG, "Scale status: %s, %.2fg (%ld), samples=%u, failures=%u",
+                                (instance->_deviceState.isWeightStable ? "stable" : "unstable"),
+                                instance->_deviceState.currentWeight,
+                                instance->_deviceState.currentRawValue,
+                                instance->_sampleCount,
+                                instance->_failureCount);
+                        } else {
+                            ESP_LOGW(TAG, "Scale status: UNRESPONSIVE!");
+                        }
+                        instance->_reportCounter = 0;
+                    }
+#else
+                    if (instance->_reportCounter >= REPORTS_PERIOD) {
+                        instance->_reportCounter = 0;
+                    }
 #endif
 
-        vTaskDelay(pdMS_TO_TICKS(SCALE_SAMPLING_PERIOD_MS));
+                    // Reset accumulators for next window
+                    instance->_rawSum = 0;
+                    instance->_sampleCount = 0;
+                    instance->_failureCount = 0;
+                    instance->_tickCounter = 0;
+
+                    // Power down and transition to IDLE
+                    if (xSemaphoreTake(instance->_scaleMutex, pdMS_TO_TICKS(10)) == pdTRUE) {
+                        instance->_scale.power_down();
+                        xSemaphoreGive(instance->_scaleMutex);
+                    }
+                    instance->_state = ScaleState::IDLE;
+                    instance->_idleTickCounter = 0;
+                }
+                break;
+            }
+
+            case ScaleState::IDLE: {
+                instance->_idleTickCounter++;
+                // Stay idle for ~200ms, then wake up and allow settling
+                if (instance->_idleTickCounter >= IDLE_TICKS) {
+                    if (xSemaphoreTake(instance->_scaleMutex, pdMS_TO_TICKS(10)) == pdTRUE) {
+                        instance->_scale.power_up();
+                        xSemaphoreGive(instance->_scaleMutex);
+                    }
+                    instance->_state = ScaleState::SETTLING;
+                    instance->_settlingCounter = 0;
+                }
+                break;
+            }
+
+            case ScaleState::SETTLING: {
+                instance->_settlingCounter++;
+                // Wait for settling time (~52ms) before starting to sample
+                if (instance->_settlingCounter >= SETTLING_TICKS) {
+                    instance->_state = ScaleState::SAMPLING;
+                    instance->_tickCounter = 0;
+                }
+                break;
+            }
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(TICK_MS));
     }
 }

@@ -73,14 +73,13 @@ Each tank contains a Dallas 1-Wire EEPROM (DS28E07 or DS2431+) accessible via th
 
 ### 3.2 Tank Data Structure
 
-Each tank EEPROM stores:
+Each tank's Dallas 1-Wire EEPROM provides a 64-bit UID from its ROM (read-only, factory-programmed). The EEPROM data area stores:
 
 | Field | Description | Format |
 |-------|-------------|--------|
-| UID | 64-bit unique identifier | Binary |
 | Name | User-defined tank name | Up to 80 characters |
-| Capacity | Tank capacity | Q3.13 fixed-point (liters) |
-| Kibble Density | Food density | Q2.14 fixed-point (kg/L) |
+| Capacity | Tank capacity | uint16_t (milliliters) |
+| Kibble Density | Food density | uint16_t (grams per liter) |
 | Servo Idle PWM | Calibrated stop position | 16-bit integer |
 | Remaining Weight | Estimated remaining food | Grams |
 | Last Base MAC | Last connected device MAC | 6 bytes |
@@ -91,7 +90,7 @@ Each tank EEPROM stores:
 
 The TankManager continuously scans all 6 buses for connected tanks. Detection occurs:
 - At system boot
-- Every 5 seconds during operation
+- Every 1 second during normal operation (3 seconds after a change is detected)
 - On-demand via API request
 
 ---
@@ -125,7 +124,7 @@ The system tracks weight stability to ensure accurate readings during dispensing
 
 ```json
 {
-  "id": 1,
+  "uid": 1,
   "name": "string",
   "ingredients": [
     {
@@ -143,6 +142,8 @@ The system tracks weight stability to ensure accurate readings during dispensing
   "lastUsed": "timestamp"
 }
 ```
+
+> **Note:** Recipe `uid` is a `uint32_t` unique identifier that auto-increments when new recipes are created. The UID is never reused and provides stable identification across recipe operations.
 
 ### 5.2 Recipe Execution
 
@@ -168,7 +169,7 @@ Single-tank dispensing without a recipe:
 ### 6.1 Motor Stall Detection
 
 - Monitors weight changes during active feeding
-- Triggers if weight change < 0.2g over 5-second window
+- Triggers if no weight change > 0.2g detected over 5-second window
 - Immediately stops all servos on detection
 
 ### 6.2 Bowl Overfill Protection
@@ -224,7 +225,7 @@ Dedicated FreeRTOS task runs at 10 Hz (priority 10) performing continuous safety
 |--------|----------|-------------|
 | GET | `/api/status` | Device operational status |
 | GET | `/api/system/info` | System info (uptime, version, build) |
-| POST | `/api/system/restart` | Reboot device |
+| POST | `/api/system/reboot` | Reboot device |
 | POST | `/api/system/factory-reset` | Factory reset |
 | POST | `/api/system/time` | Set system time |
 
@@ -257,7 +258,7 @@ Dedicated FreeRTOS task runs at 10 Hz (priority 10) performing continuous safety
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | POST | `/api/feed/immediate/{uid}` | Dispense specific weight from tank |
-| POST | `/api/feed/recipe/{id}` | Execute recipe (optional servings param) |
+| POST | `/api/feed/recipe/{uid}` | Execute recipe (optional servings param) |
 | GET | `/api/feeding/history` | Feeding history with timestamps |
 | POST | `/api/feeding/stop` | Emergency stop |
 
@@ -267,8 +268,8 @@ Dedicated FreeRTOS task runs at 10 Hz (priority 10) performing continuous safety
 |--------|----------|-------------|
 | GET | `/api/recipes` | List all recipes |
 | POST | `/api/recipes` | Create new recipe |
-| PUT | `/api/recipes/{id}` | Update recipe |
-| DELETE | `/api/recipes/{id}` | Delete recipe |
+| PUT | `/api/recipes/{uid}` | Update recipe |
+| DELETE | `/api/recipes/{uid}` | Delete recipe |
 
 ### 8.7 Diagnostics & Logs Endpoints
 
@@ -296,13 +297,13 @@ The SSE endpoint provides a persistent HTTP connection for server-initiated push
 
 #### Event Types
 
-| Event | Trigger | Payload |
-|-------|---------|---------|
-| `tanks_changed` | Tank population changes (connect/disconnect) | `{}` |
-| `status_changed` | System state transition | `{state: string}` |
-| `feeding_progress` | Weight update during feeding | `{weight: number, target: number}` |
-| `feeding_complete` | Feeding operation finished | `{success: boolean, dispensed: number}` |
-| `error` | Error condition detected | `{code: string, message: string}` |
+| Event | Trigger | Payload | Status |
+|-------|---------|---------|--------|
+| `tanks_changed` | Tank population changes (connect/disconnect) | `{}` | ✓ Implemented |
+| `status_changed` | System state transition | `{state: string}` | Planned |
+| `feeding_progress` | Weight update during feeding | `{weight: number, target: number}` | Planned |
+| `feeding_complete` | Feeding operation finished | `{success: boolean, dispensed: number}` | Planned |
+| `error` | Error condition detected | `{code: string, message: string}` | Planned |
 
 #### Message Format
 
@@ -356,7 +357,7 @@ Display updates are handled by a dedicated task (priority 4) to prevent blocking
 ### 10.1 Battery Monitoring
 
 - **ADC Input:** GPIO 35 (half-voltage divider)
-- **Voltage Range:** 3000-4200 mV (Li-ion)
+- **Voltage Range:** 3300-4200 mV (Li-ion)
 - **Sampling:** Every 500ms
 - **Averaging:** Rolling window (10 samples)
 - **Mapping:** Sigmoidal function for realistic percentage
@@ -598,7 +599,7 @@ The following areas are identified for potential enhancement:
     "uid": "A1B2C3D4E5F6G7H8",
     "name": "Chicken Kibble",
     "busIndex": 0,
-    "remainingWeight": 1.25,
+    "remainingWeightGrams": 800,
     "capacity": 2.5,
     "density": 0.65,
     "calibration": {
@@ -614,7 +615,7 @@ The following areas are identified for potential enhancement:
 
 ```json
 {
-  "id": 1,
+  "uid": 1,
   "name": "Morning Mix",
   "ingredients": [
     {"tankUid": "A1B2C3D4E5F6G7H8", "percentage": 70},
@@ -631,22 +632,21 @@ The following areas are identified for potential enhancement:
 
 ## Appendix B: Tank EEPROM Memory Map
 
-Dallas 1-Wire EEPROMs (DS28E07/DS2431+) provide 1Kb (128 bytes) of storage per tank.
+Dallas 1-Wire EEPROMs (DS28E07/DS2431+) provide 1Kb (128 bytes) of storage per tank. The 64-bit UID is read from the 1-Wire ROM (factory-programmed), not stored in the data area.
 
 | Offset | Size | Field |
 |--------|------|-------|
-| 0x00 | 8 | UID |
-| 0x08 | 80 | Name |
-| 0x58 | 2 | Capacity (Q3.13) |
-| 0x5A | 2 | Density (Q2.14) |
-| 0x5C | 2 | Servo Idle PWM |
-| 0x5E | 2 | Remaining Weight |
-| 0x60 | 6 | Last Base MAC |
-| 0x66 | 1 | Bus Index |
-| 0x67 | 1 | Reserved |
-| 0x68 | 32 | Reed-Solomon ECC |
+| 0x00 | 6 | Last Base MAC |
+| 0x06 | 1 | Bus Index |
+| 0x07 | 1 | Name Length |
+| 0x08 | 2 | Capacity (mL) |
+| 0x0A | 2 | Density (g/L) |
+| 0x0C | 2 | Servo Idle PWM |
+| 0x0E | 2 | Remaining Weight (g) |
+| 0x10 | 80 | Name |
+| 0x60 | 32 | Reed-Solomon ECC |
 
-Total: 128 bytes
+Total: 128 bytes (96 data + 32 ECC)
 
 ---
 

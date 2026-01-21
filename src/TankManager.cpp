@@ -38,9 +38,9 @@ void TankEEpromData_t::printTo(Stream& stream, TankEEpromData_t* eeprom)
     stream.flush();
     stream.printf("nameLength:     %d\r\n", eeprom->data.nameLength);
     stream.flush();
-    stream.printf("capacity:       %2.4f\r\n", TankManager::q3_13_to_double(eeprom->data.capacity));
+    stream.printf("capacity:       %2.4f L\r\n", (double)eeprom->data.capacity * 1E-3);
     stream.flush();
-    stream.printf("density:        %2.4f\r\n", TankManager::q2_14_to_double(eeprom->data.density));
+    stream.printf("density:        %d g/L\r\n", (int)eeprom->data.density);
     stream.flush();
     stream.printf("servoIdlePwm:   %d\r\n", eeprom->data.servoIdlePwm);
     stream.flush();
@@ -256,10 +256,10 @@ bool TankInfo::fillFromEeprom(TankEEpromData_t& eeprom)
         name = "";
     }
 
-    capacityLiters = TankManager::q3_13_to_double(eeprom.data.capacity);
-    kibbleDensity  = TankManager::q2_14_to_double(eeprom.data.density);
+    capacityLiters = eeprom.data.capacity / 1000.0;  // mL to L
+    kibbleDensity  = eeprom.data.density / 1000.0;   // g/L to kg/L
     // Remaining kibble (in kg in TankInfo, in 16-bits integer grams in eeprom)
-    remaining_weight_kg = eeprom.data.remainingGrams * 1E-3;
+    remaining_weight_grams = eeprom.data.remainingGrams;
     servoIdlePwm        = eeprom.data.servoIdlePwm;
     isFullInfo          = true;
     return true;
@@ -289,16 +289,17 @@ TankInfo::TankInfoDiscrepancies_e TankInfo::toTankData(TankEEpromData_t& eeprom)
         memcpy(eeprom.data.history.lastBaseMAC48, lastBaseMAC48, 6);
     }
     // Specs
-    uint16_t qCap  = TankManager::double_to_q3_13(capacityLiters);
-    uint16_t qDens = TankManager::double_to_q2_14(kibbleDensity);
-    if (eeprom.data.servoIdlePwm != servoIdlePwm || eeprom.data.capacity != qCap || eeprom.data.density != qDens) {
+    uint16_t capMl   = (uint16_t)(capacityLiters * 1000.0);  // L to mL
+    uint16_t densGpL = (uint16_t)(kibbleDensity * 1000.0);   // kg/L to g/L
+    if (eeprom.data.servoIdlePwm != servoIdlePwm || eeprom.data.capacity != capMl || eeprom.data.density != densGpL) {
         result |= TID_SPECS_CHANGED;
         eeprom.data.servoIdlePwm = servoIdlePwm;
-        eeprom.data.capacity     = qCap;
-        eeprom.data.density      = qDens;
+        eeprom.data.capacity     = capMl;
+        eeprom.data.density      = densGpL;
     }
     // Remaining kibble (in grams in eeprom, in kg in TankInfo)
-    uint32_t tankRemGrams = (uint32_t)std::abs(remaining_weight_kg * 1E3);
+    // Clamp to uint16_t max (65535 grams = 65.535 kg) to prevent overflow
+    uint16_t tankRemGrams = (uint16_t)std::min(65535.0, std::abs(remaining_weight_grams));
     if (eeprom.data.remainingGrams != tankRemGrams) {
         result |= TID_REMAINING_CHANGED;
         eeprom.data.remainingGrams = tankRemGrams;
@@ -711,7 +712,7 @@ bool TankManager::updateRemaingKibble(const uint64_t uid, uint16_t newRemainingG
     bool foundInCache = false;
     for (auto& tank : _knownTanks) {
         if (tank.uid == uid) {
-            tank.remaining_weight_kg = (double)newRemainingGrams / 1000.0;
+            tank.remaining_weight_grams = (double)newRemainingGrams;
             foundInCache             = true;
             break;
         }
@@ -724,7 +725,7 @@ bool TankManager::updateRemaingKibble(const uint64_t uid, uint16_t newRemainingG
     if (xSemaphoreTake(_deviceStateMutex, MUTEX_ACQUISITION_TIMEOUT) == pdTRUE) {
         for (auto& t : _deviceState.connectedTanks) {
             if (t.uid == uid) {
-                t.remaining_weight_kg = (double)newRemainingGrams / 1000.0;
+                t.remaining_weight_grams = (double)newRemainingGrams;
                 break;
             }
         }
@@ -860,13 +861,13 @@ void TankManager::printConnectedTanks(Stream& stream)
         if (tank.isFullInfo) {
             stream.printf("  Capacity:         %.3f L\r\n", tank.capacityLiters);
             stream.printf("  Density:          %.3f kg/L\r\n", tank.kibbleDensity);
-            stream.printf("  Remaining:        %.3f kg (%.0f g)\r\n", tank.remaining_weight_kg, tank.remaining_weight_kg * 1000.0);
+            stream.printf("  Remaining:        %.0f g\r\n", tank.remaining_weight_grams);
             stream.printf("  Servo Idle PWM:   %u\r\n", tank.servoIdlePwm);
 
             // Calculate and show fill percentage if capacity is set
             if (tank.capacityLiters > 0 && tank.kibbleDensity > 0) {
-                double maxKg = tank.capacityLiters * tank.kibbleDensity;
-                double fillPercent = (tank.remaining_weight_kg / maxKg) * 100.0;
+                double maxGrams = tank.capacityLiters * tank.kibbleDensity * 1E3;
+                double fillPercent = (tank.remaining_weight_grams / maxGrams) * 100.0;
                 stream.printf("  Fill Level:       %.1f%%\r\n", fillPercent);
             }
 
@@ -883,6 +884,45 @@ void TankManager::printConnectedTanks(Stream& stream)
 }
 
 #pragma region Test methods for debug, to be commented out upon release
+
+SwiMuxSerialResult_e TankManager::swiRead(uint8_t busIndex, uint16_t address, uint8_t* dataOut, uint16_t length)
+{
+    return _swiMux.read(busIndex, dataOut, address & 0xFF, length);
+}
+
+
+/**
+ * @brief Test the formatting of a memory on a designated bus. 
+ * @param index Index of the bus to format the memory on.
+ * @return A value of the SwiMuxSerialResult_e enum.
+ */
+SwiMuxSerialResult_e TankManager::formatTank(uint8_t index)
+{
+    if (index < 0 || index >= NUMBER_OF_BUSES) {
+        ESP_LOGE(TAG, "TankManager::formatTank called with invalid argument value (%d)", index);
+        return SMREZ_BUS_INDEX_OUT_OF_RANGE;
+    }
+    TankEEpromData_t data;
+    TankEEpromData_t::format(data);
+    TankEEpromData_t::finalize(data);
+    SwiMuxSerialResult_e res = SMREZ_MutexAcquisition;
+    if (xSemaphoreTakeRecursive(_swimuxMutex, MUTEX_ACQUISITION_TIMEOUT) == pdTRUE) {
+        res = _swiMux.write(index, (const uint8_t*)&data, 0, sizeof(TankEEpromData_t));
+        xSemaphoreGiveRecursive(_swimuxMutex);
+    }
+
+    // Invalidate cache so refresh() will re-read the EEPROM
+    if (res == SMREZ_OK) {
+        for (auto& tank : _knownTanks) {
+            if (tank.busIndex == index) {
+                tank.isFullInfo = false;
+                break;
+            }
+        }
+    }
+
+    return res;
+}
 
 #ifdef KIBBLET5_DEBUG_ENABLED
 
@@ -957,38 +997,13 @@ bool TankManager::testRollCall(RollCallArray_t& results)
     return true;
 }
 
-SwiMuxSerialResult_e TankManager::testSwiRead(uint8_t busIndex, uint16_t address, uint8_t* dataOut, uint16_t length)
-{
-    return _swiMux.read(busIndex, dataOut, address & 0xFF, length);
-}
+
 
 SwiMuxSerialResult_e TankManager::testSwiWrite(uint8_t busIndex, uint16_t address, const uint8_t* dataIn, uint16_t length)
 {
     return _swiMux.write(busIndex, dataIn, address & 0xFF, length);
 }
 
-/**
- * @brief Test the formatting of a memory on a designated bus. 
- * @param index Index of the bus to format the memory on.
- * @return A value of the SwiMuxSerialResult_e enum.
- */
-SwiMuxSerialResult_e TankManager::testFormat(uint8_t index)
-{
-    if (index < 0 || index >= NUMBER_OF_BUSES) {
-        ESP_LOGE(TAG, "TankManager::testFormat called with invalid argument value (%d)", index);
-        return SMREZ_BUS_INDEX_OUT_OF_RANGE;
-    }
-    TankEEpromData_t data;
-    TankEEpromData_t::format(data);
-    TankEEpromData_t::finalize(data);
-    SwiMuxSerialResult_e res = SMREZ_MutexAcquisition;
-    if (xSemaphoreTakeRecursive(_swimuxMutex, MUTEX_ACQUISITION_TIMEOUT) == pdTRUE) {
-        res = _swiMux.write(index, (const uint8_t*)&data, 0, sizeof(TankEEpromData_t));
-        xSemaphoreGiveRecursive(_swimuxMutex);
-    }
-
-    return res;
-}
 
 SwiMuxSerialResult_e TankManager::testSwiMuxECC(uint8_t index, int& correctedCount)
 {

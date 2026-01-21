@@ -17,7 +17,6 @@ static void _saveSettingsToFile(const DeviceState::Settings_t& settings)
     JsonDocument doc;
     doc["dispenseWeightChangeThreshold"]      = settings.getDispensingWeightChangeThreshold();
     doc["dispensingNoWeightChangeTimeout_ms"] = settings.getDispensingNoWeightChangeTimeout_ms();
-    doc["scaleSamplesCount"]                  = settings.getScaleSamplesCount();
 
     File file = SPIFFS.open(SETTINGS_FILE, FILE_WRITE);
     if (!file) {
@@ -65,7 +64,6 @@ static bool _loadSettingsFromFile(DeviceState::Settings_t& settings)
     // Load values from JSON, using defaults as a fallback if a key is missing.
     settings.setDispensingWeightChangeThreshold(doc["dispenseWeightChangeThreshold"] | 3.0f);
     settings.setDispensingNoWeightChangeTimeout_ms(doc["dispensingNoWeightChangeTimeout_ms"] | 10000);
-    settings.setScaleSamplesCount(doc["scaleSamplesCount"] | 5);
 
     ESP_LOGI(TAG, "Settings loaded successfully from %s", SETTINGS_FILE);
     return true;
@@ -86,7 +84,6 @@ void DeviceState::Settings_t::resetToDefaults(bool save)
 {
     _dispensingWeightChangeThreshold    = 3.0f;
     _dispensingNoWeightChangeTimeout_ms = 10000;
-    _scaleSamplesCount                  = 5;
     if (save) {
         _saveSettingsToFile(*this);
     }
@@ -106,11 +103,6 @@ uint32_t DeviceState::Settings_t::getDispensingNoWeightChangeTimeout_ms() const
     return _dispensingNoWeightChangeTimeout_ms;
 }
 
-uint8_t DeviceState::Settings_t::getScaleSamplesCount() const
-{
-    return _scaleSamplesCount;
-}
-
 // --- Setters ---
 
 void DeviceState::Settings_t::setDispensingWeightChangeThreshold(float newValue)
@@ -125,14 +117,6 @@ void DeviceState::Settings_t::setDispensingNoWeightChangeTimeout_ms(uint32_t val
 {
     if (_dispensingNoWeightChangeTimeout_ms != value) {
         _dispensingNoWeightChangeTimeout_ms = value;
-        _saveSettingsToFile(*this);
-    }
-}
-
-void DeviceState::Settings_t::setScaleSamplesCount(uint8_t value)
-{
-    if (_scaleSamplesCount != value) {
-        _scaleSamplesCount = value > 0 ? value : 1; // Ensure at least 1 sample
         _saveSettingsToFile(*this);
     }
 }
@@ -187,8 +171,39 @@ void DeviceState::printTo(DeviceState& state, Stream& stream)
             if (tank.isFullInfo) {
                 stream.printf("    Capacity (L):     %.3f\r\n", tank.capacityLiters);
                 stream.printf("    Density (kg/L):   %.3f\r\n", tank.kibbleDensity);
-                stream.printf("    Remaining (kg):   %.3f\r\n", tank.remaining_weight_kg);
+                stream.printf("    Remaining (g):    %0d\r\n", (uint32_t)tank.remaining_weight_grams);
                 stream.printf("    Servo Idle PWM:   %u\r\n", tank.servoIdlePwm);
+            }
+            stream.flush();
+        }
+    }
+
+    // --- Stored Recipes Section ---
+    stream.println();
+    stream.println("--- Stored Recipes ---");
+    if (state.storedRecipes.empty()) {
+        stream.println("  (no recipes stored)");
+    } else {
+        stream.printf("  Count: %d\r\n", (int)state.storedRecipes.size());
+        for (size_t i = 0; i < state.storedRecipes.size(); i++) {
+            const Recipe& recipe = state.storedRecipes[i];
+            stream.println();
+            stream.printf("  [Recipe %d]\r\n", (int)i);
+            stream.printf("    UID:          %u\r\n", recipe.uid);
+            stream.printf("    Name:         %s\r\n", recipe.name.c_str());
+            stream.printf("    Daily Weight: %.2f g\r\n", recipe.dailyWeight);
+            stream.printf("    Servings:     %d\r\n", recipe.servings);
+            stream.printf("    Enabled:      %s\r\n", recipe.isEnabled ? "yes" : "no");
+            stream.printf("    Created:      %lld\r\n", recipe.created);
+            stream.printf("    Last Used:    %lld\r\n", recipe.lastUsed);
+            if (recipe.ingredients.empty()) {
+                stream.println("    Ingredients:  (none)");
+            } else {
+                stream.printf("    Ingredients (%d):\r\n", (int)recipe.ingredients.size());
+                for (const auto& ing : recipe.ingredients) {
+                    stream.printf("      - Tank UID: %llX, Percentage: %.1f%%\r\n",
+                                  (unsigned long long)ing.tankUid, ing.percentage);
+                }
             }
             stream.flush();
         }
@@ -197,10 +212,10 @@ void DeviceState::printTo(DeviceState& state, Stream& stream)
     // --- Last Recipe Section ---
     stream.println();
     stream.println("--- Last Recipe ---");
-    if (state.lastRecipe.id == 0 && state.lastRecipe.name.empty()) {
+    if (state.lastRecipe.uid == 0 && state.lastRecipe.name.empty()) {
         stream.println("  (none)");
     } else {
-        stream.printf("  ID:           %d\r\n", state.lastRecipe.id);
+        stream.printf("  UID:          %u\r\n", state.lastRecipe.uid);
         stream.printf("  Name:         %s\r\n", state.lastRecipe.name.c_str());
         stream.printf("  Daily Weight: %.2f g\r\n", state.lastRecipe.dailyWeight);
         stream.printf("  Servings:     %d\r\n", state.lastRecipe.servings);
@@ -231,11 +246,11 @@ void DeviceState::printTo(DeviceState& state, Stream& stream)
         stream.printf("  Entries: %d\r\n", (int)state.feedingHistory.size());
         for (size_t i = 0; i < state.feedingHistory.size(); i++) {
             const FeedingHistoryEntry& entry = state.feedingHistory[i];
-            stream.printf("  [%d] ts=%lld type=%s recipe=%d success=%s amt=%.2fg desc=\"%s\"\r\n",
+            stream.printf("  [%d] ts=%lld type=%s recipe=%u success=%s amt=%.2fg desc=\"%s\"\r\n",
                           (int)i,
                           (long long)entry.timestamp,
                           entry.type.c_str(),
-                          entry.recipeId,
+                          entry.recipeUid,
                           entry.success ? "Y" : "N",
                           entry.amount,
                           entry.description.c_str());

@@ -22,15 +22,15 @@ class RecipeProcessor {
     // These methods are called by the central feeding task
     bool executeImmediateFeed(const uint64_t tankUid, float targetWeight);
     // Updated to accept the number of servings to dispense, defaulting to 1.
-    bool executeRecipeFeed(int recipeId, int servings = 1);
+    bool executeRecipeFeed(uint32_t recipeUid, int servings = 1);
     void stopAllFeeding();
 
     // Recipe management methods (called by WebServer)
     bool addRecipe(const Recipe& recipe);
     bool updateRecipe(const Recipe& recipe);
-    bool deleteRecipe(int recipeId);
+    bool deleteRecipe(uint32_t recipeUid);
     std::vector<Recipe> getRecipes();
-    Recipe getRecipeById(int recipeId);
+    Recipe getRecipeByUid(uint32_t recipeUid);
 
     // Provide access to the scale for taring
     HX711Scale& getScale();

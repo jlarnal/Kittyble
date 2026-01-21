@@ -30,7 +30,7 @@ struct FeedCommand {
     FeedCommandType type = FeedCommandType::NONE;
     uint64_t tankUid     = 0;
     float amountGrams    = 0.0;
-    int recipeId         = 0;
+    uint32_t recipeUid   = 0;
     int servings         = 1; // Add the servings member
     bool processed       = true;
 };
@@ -39,14 +39,14 @@ struct FeedCommand {
 struct FeedingHistoryEntry {
     time_t timestamp;
     std::string type; // "recipe" or "immediate"
-    int recipeId;
+    uint32_t recipeUid;
     bool success;
     float amount;
     std::string description; // e.g., Recipe Name or "Immediate Feed"
 
     // Constructor to allow for direct initialization.
-    FeedingHistoryEntry(time_t ts, const std::string& t, int rId, bool s, float a, const std::string& d)
-        : timestamp(ts), type(t), recipeId(rId), success(s), amount(a), description(d)
+    FeedingHistoryEntry(time_t ts, const std::string& t, uint32_t rUid, bool s, float a, const std::string& d)
+        : timestamp(ts), type(t), recipeUid(rUid), success(s), amount(a), description(d)
     {}
 };
 
@@ -93,6 +93,9 @@ struct DeviceState {
     std::string currentFeedingStatus = "Idle";
     std::vector<FeedingHistoryEntry> feedingHistory;
 
+    // Stored Recipes (synced from RecipeProcessor)
+    std::vector<Recipe> storedRecipes;
+
     // Servo Power
     bool servoPower = false;
 
@@ -105,17 +108,14 @@ struct DeviceState {
         // Getters
         float getDispensingWeightChangeThreshold() const;
         uint32_t getDispensingNoWeightChangeTimeout_ms() const;
-        uint8_t getScaleSamplesCount() const;
 
         // Setters (These automatically save changes to SPIFFS)
         void setDispensingWeightChangeThreshold(float newValue);
         void setDispensingNoWeightChangeTimeout_ms(uint32_t value);
-        void setScaleSamplesCount(uint8_t value);
 
       private:
         float _dispensingWeightChangeThreshold;
         uint32_t _dispensingNoWeightChangeTimeout_ms;
-        uint8_t _scaleSamplesCount;
     };
 
     Settings_t Settings;

@@ -33,8 +33,8 @@ struct __attribute__((packed)) TankHistory_t {
 struct __attribute__((packed)) TankEEpromRecordData_t {
     TankHistory_t history;
     uint8_t nameLength;
-    uint16_t capacity;
-    uint16_t density;
+    uint16_t capacity; // Tank capacity in milliliters (mL)
+    uint16_t density; // Kibble density in grams per liter (g/L)
     uint16_t servoIdlePwm;
     uint16_t remainingGrams;
     char name[80];
@@ -46,19 +46,22 @@ struct __attribute__((packed)) TankEEpromData_t {
     // ECC Section (32 bytes)
     uint8_t ecc[32];
 
-    TankEEpromData_t(){
-        memset(&data,0, DATA_SIZE);
-        memset(&ecc,0,ECC_SIZE);
+    TankEEpromData_t()
+    {
+        memset(&data, 0, DATA_SIZE);
+        memset(&ecc, 0, ECC_SIZE);
     }
 
-    TankEEpromData_t(TankEEpromData_t &other){
-        memcpy(&data,&other.data,DATA_SIZE);
-        memcpy(&ecc,&other.ecc,ECC_SIZE);
+    TankEEpromData_t(TankEEpromData_t& other)
+    {
+        memcpy(&data, &other.data, DATA_SIZE);
+        memcpy(&ecc, &other.ecc, ECC_SIZE);
     }
 
-    TankEEpromData_t(TankEEpromData_t &&other){
-        memcpy(&data,&other.data,DATA_SIZE);
-        memcpy(&ecc,&other.ecc,ECC_SIZE);
+    TankEEpromData_t(TankEEpromData_t&& other)
+    {
+        memcpy(&data, &other.data, DATA_SIZE);
+        memcpy(&ecc, &other.ecc, ECC_SIZE);
     }
 
     /** @brief Sets the structure to a default "New Tank" state. */
@@ -68,11 +71,9 @@ struct __attribute__((packed)) TankEEpromData_t {
     /** @brief Checks validity and attempts to repair corrupted data using RS-FEC. Returns false if unrecoverable. */
     static bool sanitize(TankEEpromData_t& eedata);
     static void printTo(Stream& stream, TankEEpromData_t* eeprom);
-    static constexpr size_t DATA_SIZE = sizeof(data);
-    static constexpr size_t ECC_SIZE  = sizeof(ecc);
+    static constexpr size_t DATA_SIZE       = sizeof(data);
+    static constexpr size_t ECC_SIZE        = sizeof(ecc);
     static constexpr size_t NAME_FIELD_SIZE = sizeof(data.name);
-
-
 };
 
 /**
@@ -88,12 +89,12 @@ struct TankInfo {
     int8_t busIndex; // The bus index (0-5) this tank has been detected at. Equal to -1 if not present on any bus.
     bool isFullInfo; // If <false>, the whole structure is simply a presence witness and onlyh the `.uid` and `.busIndex` fields are populated.
 
-    // Values converted from fixed-point for external use
-    double capacityLiters; // Volumetric capacity in Liters
-    double kibbleDensity; // Kibble density in kg/L
+    // Values converted from EEPROM storage units for external use
+    double capacityLiters; // Volumetric capacity in Liters (EEPROM stores mL)
+    double kibbleDensity; // Kibble density in kg/L (EEPROM stores g/L)
 
     // Calculated value based on EEPROM data
-    double remaining_weight_kg; // Estimated remaining weight in kilograms
+    double remaining_weight_grams; // Estimated remaining weight in grams
 
     // Servo calibration data
     uint16_t servoIdlePwm;
@@ -106,7 +107,7 @@ struct TankInfo {
           isFullInfo(false),
           capacityLiters(0),
           kibbleDensity(0),
-          remaining_weight_kg(0),
+          remaining_weight_grams(0),
           servoIdlePwm(1500)
     {}
 
@@ -142,7 +143,7 @@ class TankManager {
           _pwm(PCA9685()),
           _isServoMode(false),
           _swiMux(SWIMUX_SERIAL_DEVICE, SWIMUX_TX_PIN, SWIMUX_RX_PIN),
-          _lastKnownUids{}
+          _lastKnownUids {}
     {}
 
     /** @brief Initialize the multiplexed OneWire setup but does not start the task. */
@@ -220,6 +221,8 @@ class TankManager {
     PCA9685::I2C_Result_e openHopper() { return setServoPWM(0, _hopperOpenPwm); }
     PCA9685::I2C_Result_e closeHopper() { return setServoPWM(0, _hopperClosedPwm); }
 
+    SwiMuxSerialResult_e swiRead(uint8_t busIndex, uint16_t address, uint8_t* dataOut, uint16_t length);
+    SwiMuxSerialResult_e formatTank(uint8_t index);
 
 
   private:
@@ -235,11 +238,10 @@ class TankManager {
     bool testSwiMuxSleep(), testSwiBusUID(uint8_t index, uint64_t& result);
     inline HardwareSerial& testGetSwiMuxPort() { return _swiMux.getSerialPort(); }
     bool testRollCall(RollCallArray_t& results);
-    SwiMuxSerialResult_e testFormat(uint8_t index);
     SwiMuxSerialResult_e testSwiMuxECC(uint8_t busIndex, int& correctedCount);
-    SwiMuxSerialResult_e testSwiRead(uint8_t busIndex, uint16_t address, uint8_t* dataOut, uint16_t length);
     SwiMuxSerialResult_e testSwiWrite(uint8_t busIndex, uint16_t address, const uint8_t* dataIn, uint16_t length);
 #endif
+
     static constexpr uint32_t SWIMUX_POWERUP_DELAY_MS     = 100;
     static constexpr TickType_t MUTEX_ACQUISITION_TIMEOUT = pdMS_TO_TICKS(2000);
 
@@ -271,12 +273,6 @@ class TankManager {
     // Servo control private methods.
     PCA9685::I2C_Result_e setServoPWM(uint8_t servoNum, uint16_t pwm);
 
-
-    // --- Fixed-point conversion helpers ---
-    static inline double q3_13_to_double(uint16_t q_val) { return (double)q_val / 8192.0; }
-    static inline uint16_t double_to_q3_13(double d_val) { return (uint16_t)(d_val * 8192.0); }
-    static inline double q2_14_to_double(uint16_t q_val) { return (double)q_val / 16384.0; }
-    static inline uint16_t double_to_q2_14(double d_val) { return (uint16_t)(d_val * 16384.0); }
 
     inline void fullRefresh() { refresh(0xFFFF); }
     static void _tankDetectionTask(void* pvParam);

@@ -33,6 +33,14 @@ Battery battMon(3000, 4200, BATT_HALFV_PIN);
 static const char* TAG    = "main";
 static const char* OTATAG = "OTA update";
 
+// Serial console state machine for multi-step commands
+enum class SerialCmdState : uint8_t
+{
+    IDLE,
+    FORMAT_AWAITING_BUS
+};
+static SerialCmdState serialCmdState = SerialCmdState::IDLE;
+
 #if !defined(KIBBLET5_DEBUG_ENABLED) && defined(LOG_TO_FILE_ENABLED)
 #define LOG_TO_SPIFFS
 #elif defined(KIBBLET5_DEBUG_ENABLED)
@@ -135,15 +143,11 @@ void setup()
 
         // Configure ArduinoOTA
         ArduinoOTA.setHostname("kibblet5");
-        ArduinoOTA.onStart([]() {
-            ESP_LOGI(TAG, "OTA Update starting...");
-        });
-        ArduinoOTA.onEnd([]() {
-            ESP_LOGI(TAG, "OTA Update complete!");
-        });
+        ArduinoOTA.onStart([]() { ESP_LOGI(TAG, "OTA Update starting..."); });
+        ArduinoOTA.onEnd([]() { ESP_LOGI(TAG, "OTA Update complete!"); });
         ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
             static int lastPercent = -1;
-            int percent = (progress * 100) / total;
+            int percent            = (progress * 100) / total;
             if (percent != lastPercent && percent % 10 == 0) {
                 ESP_LOGI(TAG, "OTA Progress: %u%%", percent);
                 lastPercent = percent;
@@ -151,11 +155,12 @@ void setup()
         });
         ArduinoOTA.onError([](ota_error_t error) {
             ESP_LOGE(TAG, "OTA Error [%u]: %s", error,
-                error == OTA_AUTH_ERROR ? "Auth Failed" :
-                error == OTA_BEGIN_ERROR ? "Begin Failed" :
-                error == OTA_CONNECT_ERROR ? "Connect Failed" :
-                error == OTA_RECEIVE_ERROR ? "Receive Failed" :
-                error == OTA_END_ERROR ? "End Failed" : "Unknown");
+              error == OTA_AUTH_ERROR        ? "Auth Failed"
+                : error == OTA_BEGIN_ERROR   ? "Begin Failed"
+                : error == OTA_CONNECT_ERROR ? "Connect Failed"
+                : error == OTA_RECEIVE_ERROR ? "Receive Failed"
+                : error == OTA_END_ERROR     ? "End Failed"
+                                             : "Unknown");
         });
         ArduinoOTA.begin();
         ESP_LOGI(TAG, "ArduinoOTA initialized on port 3232");
@@ -197,42 +202,92 @@ void loop()
 #else
     if (Serial.available()) {
         int charVal = Serial.read();
-        switch (charVal) {
-            case 's':
-            case 'S':
-                if (xSemaphoreTakeRecursive(xDeviceStateMutex, 500)) {
-                    DeviceState::printTo(globalDeviceState, Serial);
-                    xSemaphoreGiveRecursive(xDeviceStateMutex);
-                } else {
-                    ESP_LOGE(TAG, "Could not take mutex to print state!");
-                }
-                break;
-            case 'm':
-            case 'M':
-#ifndef configUSE_TRACE_FACILITY
-                ESP_LOGW(TAG, "configUSE_TRACE_FACILITY is not enabled in FreeRTOSConfig.h, cannot get task info.");
-#else
-                {
-                    TaskHandle_t mutexHolder = xSemaphoreGetMutexHolder(xDeviceStateMutex);
-                    if (mutexHolder != NULL) {
-                        TaskStatus_t taskInfo;
-                        memset(&taskInfo, 0, sizeof(TaskStatus_t));
-                        vTaskGetTaskInfo(mutexHolder, &taskInfo, pdFALSE, eInvalid);
-                        Serial.printf("xDeviceStateMutex is held by task: %s (Handle: %p), status:%d\r\n", taskInfo.pcTaskName,
-                          (void*)taskInfo.xHandle, taskInfo.eCurrentState);
+
+        // Handle multi-step command states before the main switch
+        if (serialCmdState == SerialCmdState::FORMAT_AWAITING_BUS) {
+            if (charVal == 'c' || charVal == 'C') {
+                Serial.println("\r\nFormat cancelled.");
+                serialCmdState = SerialCmdState::IDLE;
+            } else if (charVal >= '0' && charVal < ('0' + NUMBER_OF_BUSES)) {
+                uint8_t busIndex = charVal - '0';
+                Serial.printf("\r\nFormatting tank on bus %d...\r\n", busIndex);
+
+                // Format the tank
+                SwiMuxSerialResult_e res = tankManager.formatTank(busIndex);
+                if (res == SMREZ_OK) {
+                    Serial.println("Format successful. Reading back data...\r\n");
+
+                    // Read back and display the formatted EEPROM
+                    TankEEpromData_t eeprom;
+                    uint8_t* eeData = reinterpret_cast<uint8_t*>(&eeprom);
+                    res             = tankManager.swiRead(busIndex, 0, eeData, sizeof(TankEEpromData_t));
+
+                    if (res == SMREZ_OK) {
+                        // Print formatted tank details
+                        Serial.println("--- Formatted Tank EEPROM Contents ---");
+                        Serial.printf("  Name:           %.*s\r\n", eeprom.data.nameLength, eeprom.data.name);
+                        Serial.printf("  Name Length:    %d\r\n", eeprom.data.nameLength);
+                        Serial.printf("  Capacity (mL):  %d\r\n", eeprom.data.capacity);
+                        Serial.printf("  Density (g/L):  %d\r\n", eeprom.data.density);
+                        Serial.printf("  Remaining (g):  %d\r\n", eeprom.data.remainingGrams);
+                        Serial.printf("  Servo Idle PWM: %d\r\n", eeprom.data.servoIdlePwm);
+                        Serial.printf("  Last Bus Index: %d (0xFF = none)\r\n", eeprom.data.history.lastBusIndex);
+                        Serial.println("--- End EEPROM Contents ---");
                     } else {
-                        Serial.println("xDeviceStateMutex is not held by any task.");
+                        Serial.printf("Error reading back EEPROM: %d\r\n", res);
                     }
+                } else {
+                    Serial.printf("Format failed with error: %d\r\n", res);
                 }
+                tankManager.refresh(); // Force refresh after formatting (ALL tanks, to be safe)
+                Serial.println("DeviceState updated.");
+                serialCmdState = SerialCmdState::IDLE;
+            } else {
+                Serial.printf("\r\nInvalid input '%c'. Enter 0-%d or 'c' to cancel: ", (char)charVal, NUMBER_OF_BUSES - 1);
+            }
+        } else
+            switch (charVal) {
+                case 's':
+                case 'S':
+                    if (xSemaphoreTakeRecursive(xDeviceStateMutex, 500)) {
+                        DeviceState::printTo(globalDeviceState, Serial);
+                        xSemaphoreGiveRecursive(xDeviceStateMutex);
+                    } else {
+                        ESP_LOGE(TAG, "Could not take mutex to print state!");
+                    }
+                    break;
+                case 'm':
+                case 'M':
+#ifndef configUSE_TRACE_FACILITY
+                    ESP_LOGW(TAG, "configUSE_TRACE_FACILITY is not enabled in FreeRTOSConfig.h, cannot get task info.");
+#else
+                    {
+                        TaskHandle_t mutexHolder = xSemaphoreGetMutexHolder(xDeviceStateMutex);
+                        if (mutexHolder != NULL) {
+                            TaskStatus_t taskInfo;
+                            memset(&taskInfo, 0, sizeof(TaskStatus_t));
+                            vTaskGetTaskInfo(mutexHolder, &taskInfo, pdFALSE, eInvalid);
+                            Serial.printf("xDeviceStateMutex is held by task: %s (Handle: %p), status:%d\r\n", taskInfo.pcTaskName,
+                              (void*)taskInfo.xHandle, taskInfo.eCurrentState);
+                        } else {
+                            Serial.println("xDeviceStateMutex is not held by any task.");
+                        }
+                    }
 #endif
-                break;
-            case 't':
-            case 'T':
-                tankManager.printConnectedTanks(Serial);
-                break;
-            default:
-                break;
-        }
+                    break;
+                case 't':
+                case 'T':
+                    tankManager.printConnectedTanks(Serial);
+                    break;
+                case 'f':
+                case 'F':
+                    Serial.printf("\r\n--- Format Tank EEPROM ---\r\n");
+                    Serial.printf("Enter bus number (0-%d) or 'c' to cancel: ", NUMBER_OF_BUSES - 1);
+                    serialCmdState = SerialCmdState::FORMAT_AWAITING_BUS;
+                    break;
+                default:
+                    break;
+            }
     }
     vTaskDelay(pdMS_TO_TICKS(100));
 #endif
@@ -243,12 +298,12 @@ void loop()
 
 void battAndOTA_Task(void* pvParameters)
 {
-    constexpr uint32_t OTA_POLL_PERIOD_MS         = 50;   // Fast OTA polling
+    constexpr uint32_t OTA_POLL_PERIOD_MS         = 50; // Fast OTA polling
     constexpr uint32_t BATTERY_SAMPLING_PERIOD_MS = 500;
     constexpr size_t BATTERY_SAMPLE_INTERVAL      = BATTERY_SAMPLING_PERIOD_MS / OTA_POLL_PERIOD_MS;
-    constexpr size_t REPORTS_PERIOD               = 5000 / BATTERY_SAMPLING_PERIOD_MS;
+    constexpr size_t REPORTS_PERIOD               = 30000 / BATTERY_SAMPLING_PERIOD_MS;
 
-    size_t reports = REPORTS_PERIOD;
+    size_t reports        = REPORTS_PERIOD;
     size_t batteryCounter = 0;
 
     if (pvParameters == nullptr) {
@@ -315,7 +370,7 @@ void feedingTask(void* pvParameters)
                     success = processor->executeImmediateFeed(command.tankUid, command.amountGrams);
                     break;
                 case FeedCommandType::RECIPE:
-                    success = processor->executeRecipeFeed(command.recipeId);
+                    success = processor->executeRecipeFeed(command.recipeUid, command.servings);
                     break;
                 case FeedCommandType::TARE_SCALE:
                     processor->getScale().tare();

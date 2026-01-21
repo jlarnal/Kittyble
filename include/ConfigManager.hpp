@@ -17,7 +17,7 @@ struct RecipeIngredient {
 
 // Struct for a complete recipe
 struct Recipe {
-    int id;
+    uint32_t uid;
     std::string name;
     // The ingredients vector now holds percentages.
     std::vector<RecipeIngredient> ingredients;

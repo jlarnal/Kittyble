@@ -38,10 +38,33 @@ private:
     ConfigManager& _configManager;
 
     // A dedicated mutex to protect access to the _scale object and HX711 hardware
-    SemaphoreHandle_t _scaleMutex; 
+    SemaphoreHandle_t _scaleMutex;
 
     float _calibrationFactor;
     long _zeroOffset;
+
+    // State machine for non-blocking operation
+    enum class ScaleState { SAMPLING, SETTLING, IDLE };
+    ScaleState _state;
+
+    // Accumulators (reset each averaging window)
+    long _rawSum;
+    uint8_t _sampleCount;
+    uint8_t _failureCount;
+
+    // Timebase counters
+    uint8_t _tickCounter;       // counts ticks within sampling window
+    uint8_t _idleTickCounter;   // counts ticks during idle/power-down
+    uint8_t _settlingCounter;   // counts ticks during settling after power-up
+    uint8_t _reportCounter;     // counts averaging windows for 5s report
+
+    // Timing constants
+    static constexpr uint32_t TICK_MS = 13;              // ~77Hz task tick
+    static constexpr uint8_t TICKS_PER_AVERAGE = 19;     // ~247ms sampling window
+    static constexpr uint8_t IDLE_TICKS = 15;            // ~195ms idle (250-55ms for settling margin)
+    static constexpr uint8_t SETTLING_TICKS = 4;         // ~52ms settling after power-up
+    static constexpr uint8_t REPORTS_PERIOD = 20;        // 20×250ms = 5s
+    static constexpr uint8_t CALIBRATION_SAMPLES = 10;   // Fixed sample count for calibration/tare API
 
     static void _scaleTask(void *pvParameters);
 };
