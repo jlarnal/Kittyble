@@ -5,6 +5,8 @@
 .vscode/ipch
 .vscode/settings.json
 .claude/*
+docs
+./docs/*
 .*
 data
 gfx
@@ -15,4 +17,3 @@ mkspiffs.exe
 latest_part.bin
 kibblet5.puml
 spiff_part.bin
-
