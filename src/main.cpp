@@ -390,7 +390,7 @@ void feedingTask(void* pvParameters)
                 if (!success) {
                     // Keep the error message that was set by the processor
                 } else {
-                    globalDeviceState.lastError = "";
+                    globalDeviceState.lastEvent = DeviceEvent_e::DEVEVENT_NONE;
                 }
                 globalDeviceState.feedCommand.type = FeedCommandType::NONE;
             }

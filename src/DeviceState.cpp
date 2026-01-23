@@ -131,7 +131,7 @@ void DeviceState::printTo(DeviceState& state, Stream& stream)
     stream.println("--- System Status ---");
     stream.printf("  Operational:           %s\r\n", state.operational ? "true" : "false");
     stream.printf("  Operation State:       %s\r\n", state.getStateString());
-    stream.printf("  Last Error:            %s\r\n", state.lastError.c_str());
+    stream.printf("  Last Event:            %u\r\n", static_cast<uint8_t>(state.lastEvent));
     stream.printf("  Safety Mode Engaged:   %s\r\n", state.safetyModeEngaged ? "true" : "false");
     stream.printf("  Uptime (s):            %u\r\n", state.uptime_s);
     stream.printf("  WiFi Strength:         %d dBm\r\n", state.wifiStrength);

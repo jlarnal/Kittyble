@@ -426,10 +426,10 @@ void WebServer::_handleGetStatus(AsyncWebServerRequest* request)
     JsonDocument doc;
     if (xSemaphoreTake(_mutex, pdMS_TO_TICKS(200)) == pdTRUE) {
         doc["battery"]        = _deviceState.batteryLevel; // Integer (0-100). Current battery percentage.
-        doc["state"]          = _deviceState.getStateString(); // String. Enum: "IDLE", "FEEDING", "ERROR", "CALIBRATING".
-        doc["lastFeedTime"] = _deviceState.lastFeedTime; // String. Time of the last successful feed (HH:MM format).
+        doc["state"]        = static_cast<uint8_t>(_deviceState.operationState); // Integer. DeviceOperationState_e: 0=IDLE, 1=FEEDING, 2=ERROR, 3=CALIBRATING.
+        doc["lastFeedTime"] = _deviceState.lastFeedTime; // Integer. Unix timestamp of the last successful feed.
         doc["lastRecipe"]   = _deviceState.lastRecipe.name; // String. Name of the recipe last used.
-        doc["error"]          = _deviceState.lastError;
+        doc["event"]        = static_cast<uint8_t>(_deviceState.lastEvent); // Integer. DeviceEvent_e: 0=NONE, 1-9 for various events.
         xSemaphoreGive(_mutex);
     } else {
         request->send(503, "application/json", "{\"error\":\"Could not acquire state lock\"}");

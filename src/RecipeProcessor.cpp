@@ -25,7 +25,7 @@ bool RecipeProcessor::executeImmediateFeed(const uint64_t tankUid, float targetW
     if (tankUid == 0) {
         ESP_LOGE(TAG, "Immediate feed failed: No tank UID provided.");
         if (xSemaphoreTake(_mutex, portMAX_DELAY) == pdTRUE) {
-            _deviceState.lastError = "No tank specified for feed.";
+            _deviceState.lastEvent = DeviceEvent_e::DEVEVENT_NO_TANK_SPECIFIED;
             xSemaphoreGive(_mutex);
         }
         return false;
@@ -51,7 +51,7 @@ bool RecipeProcessor::executeRecipeFeed(uint32_t recipeUid, int servings)
     if (it == _recipes.end()) {
         ESP_LOGE(TAG, "Recipe feed failed: Recipe with UID %u not found.", recipeUid);
         if (xSemaphoreTake(_mutex, portMAX_DELAY) == pdTRUE) {
-            _deviceState.lastError = "Recipe not found.";
+            _deviceState.lastEvent = DeviceEvent_e::DEVEVENT_RECIPE_NOT_FOUND;
             xSemaphoreGive(_mutex);
         }
         return false;
@@ -62,7 +62,7 @@ bool RecipeProcessor::executeRecipeFeed(uint32_t recipeUid, int servings)
     if (recipe.servings <= 0) {
         ESP_LOGE(TAG, "Recipe '%s' has %d servings, cannot calculate portion size. Aborting.", recipe.name.c_str(), recipe.servings);
         if (xSemaphoreTake(_mutex, portMAX_DELAY) == pdTRUE) {
-            _deviceState.lastError = "Invalid recipe: servings is zero.";
+            _deviceState.lastEvent = DeviceEvent_e::DEVEVENT_INVALID_RECIPE_SERVINGS;
             xSemaphoreGive(_mutex);
         }
         return false;
@@ -79,7 +79,7 @@ bool RecipeProcessor::executeRecipeFeed(uint32_t recipeUid, int servings)
         if (xSemaphoreTake(_mutex, portMAX_DELAY) == pdTRUE) {
             if (_deviceState.feedCommand.type == FeedCommandType::EMERGENCY_STOP) {
                 ESP_LOGW(TAG, "Emergency stop commanded during recipe execution.");
-                _deviceState.lastError = "Feeding stopped by user.";
+                _deviceState.lastEvent = DeviceEvent_e::DEVEVENT_USER_STOPPED;
                 xSemaphoreGive(_mutex);
                 stopAllFeeding();
                 overallSuccess = false;
@@ -124,7 +124,7 @@ bool RecipeProcessor::_dispenseIngredient(const uint64_t tankUid, float targetWe
     if (servoId < 0) {
         ESP_LOGE(TAG, "Dispense failed: tank #0x%016llx not found or TankManager is in servo mode.", tankUid);
         if (xSemaphoreTake(_mutex, portMAX_DELAY) == pdTRUE) {
-            _deviceState.lastError = "Tank not found.";
+            _deviceState.lastEvent = DeviceEvent_e::DEVEVENT_TANK_NOT_FOUND;
             xSemaphoreGive(_mutex);
         }
         return false;
@@ -148,7 +148,7 @@ bool RecipeProcessor::_dispenseIngredient(const uint64_t tankUid, float targetWe
         if ((xTaskGetTickCount() - startTime) > timeoutTicks) {
             ESP_LOGE(TAG, "Dispense timed out for tank 0x%016llx.", tankUid);
             if (xSemaphoreTake(_mutex, portMAX_DELAY) == pdTRUE) {
-                _deviceState.lastError = "Dispense operation timed out.";
+                _deviceState.lastEvent = DeviceEvent_e::DEVEVENT_DISPENSE_TIMEOUT;
                 xSemaphoreGive(_mutex);
             }
             stopAllFeeding();
@@ -158,7 +158,7 @@ bool RecipeProcessor::_dispenseIngredient(const uint64_t tankUid, float targetWe
         if (xSemaphoreTake(_mutex, portMAX_DELAY) == pdTRUE) {
             if (_deviceState.feedCommand.type == FeedCommandType::EMERGENCY_STOP) {
                 ESP_LOGW(TAG, "Emergency stop commanded during dispense.");
-                _deviceState.lastError = "Feeding stopped by user.";
+                _deviceState.lastEvent = DeviceEvent_e::DEVEVENT_USER_STOPPED;
                 xSemaphoreGive(_mutex);
                 stopAllFeeding();
                 return false;

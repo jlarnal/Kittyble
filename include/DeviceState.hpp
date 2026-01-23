@@ -58,12 +58,30 @@ enum DeviceOperationState_e : uint8_t
     DOPSTATE_CALIBRATING,
 };
 
+/**
+ * @brief Device event codes
+ * @details Enumeration of all possible events the device can report
+ */
+enum DeviceEvent_e : uint8_t
+{
+    DEVEVENT_NONE = 0,                ///< No event
+    DEVEVENT_NO_TANK_SPECIFIED,       ///< No tank specified for feed
+    DEVEVENT_RECIPE_NOT_FOUND,        ///< Recipe not found
+    DEVEVENT_INVALID_RECIPE_SERVINGS, ///< Invalid recipe: servings is zero
+    DEVEVENT_USER_STOPPED,            ///< Feeding stopped by user
+    DEVEVENT_TANK_NOT_FOUND,          ///< Tank not found during dispensing
+    DEVEVENT_DISPENSE_TIMEOUT,        ///< Dispense operation timed out
+    DEVEVENT_MOTOR_STALL,             ///< SAFETY: Motor stall detected
+    DEVEVENT_BOWL_OVERFILL,           ///< SAFETY: Bowl overfill detected
+    DEVEVENT_TANK_EMPTY,              ///< Tank is empty
+};
+
 // The central volatile state structure for the entire application.
 struct DeviceState {
     // System Status
     bool operational                      = true;
     DeviceOperationState_e operationState = DeviceOperationState_e::DOPSTATE_IDLE;
-    std::string lastError                 = "";
+    DeviceEvent_e lastEvent               = DeviceEvent_e::DEVEVENT_NONE;
     bool safetyModeEngaged                = false;
     uint32_t uptime_s                     = 0;
     int8_t wifiStrength                   = 0;

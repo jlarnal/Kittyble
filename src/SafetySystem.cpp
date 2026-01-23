@@ -58,7 +58,7 @@ void SafetySystem::_safetyTask(void *pvParameters) {
                         instance->_tankManager.stopAllServos();
                         if (xSemaphoreTake(instance->_mutex, portMAX_DELAY) == pdTRUE) {
                             instance->_deviceState.safetyModeEngaged = true;
-                            instance->_deviceState.lastError = "SAFETY: Motor stall!";
+                            instance->_deviceState.lastEvent = DeviceEvent_e::DEVEVENT_MOTOR_STALL;
                             instance->_deviceState.currentFeedingStatus = "Error";
                             xSemaphoreGive(instance->_mutex);
                         }
@@ -75,7 +75,7 @@ void SafetySystem::_safetyTask(void *pvParameters) {
             instance->_tankManager.stopAllServos();
             if (xSemaphoreTake(instance->_mutex, portMAX_DELAY) == pdTRUE) {
                 instance->_deviceState.safetyModeEngaged = true;
-                instance->_deviceState.lastError = "SAFETY: Bowl overfill!";
+                instance->_deviceState.lastEvent = DeviceEvent_e::DEVEVENT_BOWL_OVERFILL;
                 instance->_deviceState.currentFeedingStatus = "Error";
                 xSemaphoreGive(instance->_mutex);
             }

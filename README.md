@@ -425,16 +425,31 @@ Each tank's EEPROM stores its own metadata with Reed-Solomon error correction fo
 
 ## 13. Device States
 
-### 13.1 Operational States
+### 13.1 Operational States (`DeviceOperationState_e`)
 
-| State | Description |
-|-------|-------------|
-| IDLE | Ready for commands |
-| FEEDING | Actively dispensing food |
-| ERROR | Fault condition detected |
-| CALIBRATING | Scale calibration in progress |
+| Value | State | Description |
+|-------|-------|-------------|
+| 0 | DOPSTATE_IDLE | Ready for commands |
+| 1 | DOPSTATE_FEEDING | Actively dispensing food |
+| 2 | DOPSTATE_ERROR | Fault condition detected |
+| 3 | DOPSTATE_CALIBRATING | Scale calibration in progress |
 
-### 13.2 State Transitions
+### 13.2 Device Events (`DeviceEvent_e`)
+
+| Value | Event | Description |
+|-------|-------|-------------|
+| 0 | DEVEVENT_NONE | No event |
+| 1 | DEVEVENT_NO_TANK_SPECIFIED | No tank specified for feed |
+| 2 | DEVEVENT_RECIPE_NOT_FOUND | Recipe not found |
+| 3 | DEVEVENT_INVALID_RECIPE_SERVINGS | Invalid recipe: servings is zero |
+| 4 | DEVEVENT_USER_STOPPED | Feeding stopped by user |
+| 5 | DEVEVENT_TANK_NOT_FOUND | Tank not found during dispensing |
+| 6 | DEVEVENT_DISPENSE_TIMEOUT | Dispense operation timed out |
+| 7 | DEVEVENT_MOTOR_STALL | SAFETY: Motor stall detected |
+| 8 | DEVEVENT_BOWL_OVERFILL | SAFETY: Bowl overfill detected |
+| 9 | DEVEVENT_TANK_EMPTY | Tank is empty |
+
+### 13.3 State Transitions
 
 ```
 IDLE -> FEEDING      (on feed command)
@@ -584,12 +599,20 @@ The following areas are identified for potential enhancement:
 ```json
 {
   "battery": 72,
-  "state": "IDLE",
-  "lastFeedTime": "08:30",
+  "state": 0,
+  "lastFeedTime": 1706234400,
   "lastRecipe": "Morning Mix",
-  "error": ""
+  "event": 0
 }
 ```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `battery` | Integer (0-100) | Current battery percentage |
+| `state` | Integer | `DeviceOperationState_e` value (see §13.1) |
+| `lastFeedTime` | Integer | Unix timestamp of last successful feed |
+| `lastRecipe` | String | Name of the recipe last used |
+| `event` | Integer | `DeviceEvent_e` value (see §13.2) |
 
 ### A.2 Tank Details Response (`/api/tanks`)
 
