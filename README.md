@@ -102,7 +102,7 @@ The TankManager continuously scans all 6 buses for connected tanks. Detection oc
 - **Sensor:** HX711 load cell amplifier
 - **Sampling Rate:** ~75 Hz (fast mode)
 - **Resolution:** Gram-level precision
-- **Averaging:** Configurable 1-20 samples per reading
+- **Averaging:** Fixed 10-sample calibration, adaptive averaging during operation
 
 ### 4.2 Calibration
 
@@ -407,7 +407,7 @@ Each tank's EEPROM stores its own metadata with Reed-Solomon error correction fo
 |------|----------|---------------|---------|
 | Feeding | 10 | 4096 | Executes feed commands |
 | Battery Monitor | 10 | 3192 | Voltage monitoring, OTA |
-| Scale | - | - | Load cell sampling |
+| Scale | 5 | 4096 | Load cell sampling |
 | TankManager | 11 | 5120 | Tank detection and control |
 | Safety | 10 | 4096 | Motor stall/overfill detection |
 | TimeKeeping | 3 | 4096 | NTP sync, time updates |

@@ -268,9 +268,7 @@ void WebServer::startAPIServer()
 
     // SSE endpoint for tank population change notifications
     _server.addHandler(&_events);
-    _tankManager.setOnTanksChangedCallback([this]() {
-        _events.send("{}", "tanks_changed");
-    });
+    _tankManager.setOnTanksChangedCallback([this]() { _events.send("{}", "tanks_changed"); });
 
     // Serve static files with Gzip support
     _server.on("/", HTTP_GET, [](AsyncWebServerRequest* request) {
@@ -425,8 +423,9 @@ void WebServer::_handleGetStatus(AsyncWebServerRequest* request)
 {
     JsonDocument doc;
     if (xSemaphoreTake(_mutex, pdMS_TO_TICKS(200)) == pdTRUE) {
-        doc["battery"]        = _deviceState.batteryLevel; // Integer (0-100). Current battery percentage.
-        doc["state"]        = static_cast<uint8_t>(_deviceState.operationState); // Integer. DeviceOperationState_e: 0=IDLE, 1=FEEDING, 2=ERROR, 3=CALIBRATING.
+        doc["battery"] = _deviceState.batteryLevel; // Integer (0-100). Current battery percentage.
+        doc["state"]
+          = static_cast<uint8_t>(_deviceState.operationState); // Integer. DeviceOperationState_e: 0=IDLE, 1=FEEDING, 2=ERROR, 3=CALIBRATING.
         doc["lastFeedTime"] = _deviceState.lastFeedTime; // Integer. Unix timestamp of the last successful feed.
         doc["lastRecipe"]   = _deviceState.lastRecipe.name; // String. Name of the recipe last used.
         doc["event"]        = static_cast<uint8_t>(_deviceState.lastEvent); // Integer. DeviceEvent_e: 0=NONE, 1-9 for various events.
@@ -589,14 +588,14 @@ void WebServer::_handleGetTanks(AsyncWebServerRequest* request)
             JsonObject tankObj = tanksArray.add<JsonObject>();
             char hexUid[17];
             snprintf(hexUid, sizeof(hexUid), "%llX", (unsigned long long)tank.uid);
-            tankObj["uid"]             = hexUid;
-            tankObj["name"]            = tank.name;
-            tankObj["busIndex"]        = tank.busIndex;
+            tankObj["uid"]                  = hexUid;
+            tankObj["name"]                 = tank.name;
+            tankObj["busIndex"]             = tank.busIndex;
             tankObj["remainingWeightGrams"] = tank.remaining_weight_grams;
-            tankObj["capacity"]        = tank.capacityLiters;
-            tankObj["density"]         = tank.kibbleDensity * 1000.0;  // Internal kg/L to API g/L
-            JsonObject calib           = tankObj["calibration"].to<JsonObject>();
-            calib["idlePwm"]           = tank.servoIdlePwm;
+            tankObj["capacity"]             = tank.capacityLiters;
+            tankObj["density"]              = tank.kibbleDensity * 1000.0; // Internal kg/L to API g/L
+            JsonObject calib                = tankObj["calibration"].to<JsonObject>();
+            calib["idlePwm"]                = tank.servoIdlePwm;
 
             tankObj["lastDispensed"]  = 0;
             tankObj["totalDispensed"] = 0;
@@ -641,19 +640,18 @@ void WebServer::_handleUpdateTank(AsyncWebServerRequest* request, JsonDocument& 
     if (!doc["remainingWeightGrams"].isNull()) {
         double weightGrams = doc["remainingWeightGrams"].as<double>();
         if (weightGrams < 0.0 || weightGrams > 65535.0) {
-            request->send(400, "application/json",
-                "{\"error\":\"remainingWeightGrams must be between 0 and 65535 grams\"}");
+            request->send(400, "application/json", "{\"error\":\"remainingWeightGrams must be between 0 and 65535 grams\"}");
             return;
         }
-        tankToUpdate.remaining_weight_grams = weightGrams;  // API grams to internal kg
+        tankToUpdate.remaining_weight_grams = weightGrams; // API grams to internal kg
     }
     if (!doc["capacity"].isNull()) {
         tankToUpdate.capacityLiters = doc["capacity"].as<double>();
     }
     if (!doc["density"].isNull()) {
-        tankToUpdate.kibbleDensity = doc["density"].as<double>() / 1000.0;  // API g/L to internal kg/L
+        tankToUpdate.kibbleDensity = doc["density"].as<double>() / 1000.0; // API g/L to internal kg/L
     } else if (!doc["kibbleDensity"].isNull()) {
-        tankToUpdate.kibbleDensity = doc["kibbleDensity"].as<double>() / 1000.0;  // API g/L to internal kg/L
+        tankToUpdate.kibbleDensity = doc["kibbleDensity"].as<double>() / 1000.0; // API g/L to internal kg/L
     }
 
     // Handle nested calibration object
@@ -738,7 +736,7 @@ void WebServer::_handleFeedImmediate(AsyncWebServerRequest* request, JsonDocumen
 void WebServer::_handleFeedRecipe(AsyncWebServerRequest* request, JsonDocument& doc)
 {
     uint32_t recipeUid = (uint32_t)request->pathArg(0).toInt();
-    int servings = doc["servings"] | 1; // Default to 1 serving if not provided
+    int servings       = doc["servings"] | 1; // Default to 1 serving if not provided
 
     if (recipeUid == 0) {
         request->send(400, "application/json", "{\"error\":\"Invalid recipeUid\"}");
@@ -1019,10 +1017,10 @@ void WebServer::_handleGetSensorDiagnostics(AsyncWebServerRequest* request)
     JsonArray tankLevels = doc["tankLevels"].to<JsonArray>();
     if (xSemaphoreTake(_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
         for (const auto& tank : _deviceState.connectedTanks) {
-            JsonObject tankLevel         = tankLevels.add<JsonObject>();
-            tankLevel["uid"]             = tank.uid;
+            JsonObject tankLevel              = tankLevels.add<JsonObject>();
+            tankLevel["uid"]                  = tank.uid;
             tankLevel["remainingWeightGrams"] = tank.remaining_weight_grams;
-            tankLevel["sensorType"]      = "estimation";
+            tankLevel["sensorType"]           = "estimation";
         }
         xSemaphoreGive(_mutex);
     }
@@ -1060,16 +1058,18 @@ void WebServer::_handleGetServoDiagnostics(AsyncWebServerRequest* request)
     request->send(200, "application/json", response);
 }
 
+
+
 void WebServer::_handleGetNetworkInfo(AsyncWebServerRequest* request)
 {
     JsonDocument doc;
     if (xSemaphoreTake(_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
-        doc["ssid"]           = WiFi.SSID();
-        doc["ipAddress"]      = WiFi.localIP().toString();
-        doc["macAddress"]     = WiFi.macAddress();
-        doc["signalStrength"] = _deviceState.wifiStrength;
-        doc["connected"]      = (WiFi.status() == WL_CONNECTED);
-        doc["uptime"]         = _deviceState.uptime_s;
+        doc["ssid"]       = WiFi.SSID();
+        doc["ipAddress"]  = WiFi.localIP().toString();
+        doc["macAddress"] = WiFi.macAddress();
+        doc["rssi"]       = WiFi.RSSI();
+        doc["connected"]  = (WiFi.status() == WL_CONNECTED);
+        doc["uptime"]     = _deviceState.uptime_s;
         xSemaphoreGive(_mutex);
     } else {
         request->send(503, "application/json", "{\"error\":\"Could not acquire state lock\"}");
