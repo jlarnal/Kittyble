@@ -82,7 +82,7 @@ static uint64_t hexStrToU64(const String& str)
 
 
 WebServer::WebServer(DeviceState& deviceState, SemaphoreHandle_t& mutex, ConfigManager& configManager, RecipeProcessor& recipeProcessor,
-  TankManager& tankManager, EPaperDisplay& display)
+  TankManager& tankManager, HX711Scale& scale, EPaperDisplay& display)
     : _server(80),
       _events("/api/events"),
       _deviceState(deviceState),
@@ -90,6 +90,7 @@ WebServer::WebServer(DeviceState& deviceState, SemaphoreHandle_t& mutex, ConfigM
       _configManager(configManager),
       _recipeProcessor(recipeProcessor),
       _tankManager(tankManager),
+      _scale(scale),
       _display(display),
       _captive_portal_buffer(nullptr)
 {}
@@ -269,6 +270,11 @@ void WebServer::startAPIServer()
     // SSE endpoint for tank population change notifications
     _server.addHandler(&_events);
     _tankManager.setOnTanksChangedCallback([this]() { _events.send("{}", "tanks_changed"); });
+    _scale.setOnWeightChangedCallback([this](float weight, long raw) {
+        char buf[64];
+        snprintf(buf, sizeof(buf), "{\"weight\":%.2f,\"raw\":%ld}", weight, raw);
+        _events.send(buf, "weight");
+    });
 
     // Serve static files with Gzip support
     _server.on("/", HTTP_GET, [](AsyncWebServerRequest* request) {

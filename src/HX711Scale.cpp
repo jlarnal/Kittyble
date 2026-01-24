@@ -181,6 +181,10 @@ void HX711Scale::_scaleTask(void* pvParameters)
                             instance->_deviceState.currentWeight = avgWeight;
                             instance->_deviceState.currentRawValue = avgRaw;
                             instance->_deviceState.isScaleResponding = true;
+
+                            if (instance->_onWeightChangedCallback) {
+                                instance->_onWeightChangedCallback(avgWeight, avgRaw);
+                            }
                         } else {
                             // No valid samples collected
                             instance->_deviceState.isWeightStable = false;
@@ -255,4 +259,8 @@ void HX711Scale::_scaleTask(void* pvParameters)
 
         vTaskDelay(pdMS_TO_TICKS(TICK_MS));
     }
+}
+
+void HX711Scale::setOnWeightChangedCallback(std::function<void(float, long)> cb) {
+    _onWeightChangedCallback = cb;
 }

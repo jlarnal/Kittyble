@@ -1,6 +1,7 @@
 #ifndef HX711SCALE_HPP
 #define HX711SCALE_HPP
 
+#include <functional>
 #include "HX711.h"
 #include "DeviceState.hpp"
 #include "ConfigManager.hpp"
@@ -30,6 +31,7 @@ public:
     float getCalibrationFactor();
     long getZeroOffset();
     void saveCalibration();
+    void setOnWeightChangedCallback(std::function<void(float, long)> cb);
 
 private:
     HX711 _scale;
@@ -42,6 +44,7 @@ private:
 
     float _calibrationFactor;
     long _zeroOffset;
+    std::function<void(float, long)> _onWeightChangedCallback;
 
     // State machine for non-blocking operation
     enum class ScaleState { SAMPLING, SETTLING, IDLE };

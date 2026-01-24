@@ -26,7 +26,7 @@ HX711Scale scale(globalDeviceState, xDeviceStateMutex, configManager);
 RecipeProcessor recipeProcessor(globalDeviceState, xDeviceStateMutex, configManager, tankManager, scale);
 EPaperDisplay display(globalDeviceState, xDeviceStateMutex);
 SafetySystem safetySystem(globalDeviceState, xDeviceStateMutex, tankManager);
-WebServer webServer(globalDeviceState, xDeviceStateMutex, configManager, recipeProcessor, tankManager, display);
+WebServer webServer(globalDeviceState, xDeviceStateMutex, configManager, recipeProcessor, tankManager, scale, display);
 Battery battMon(3000, 4200, BATT_HALFV_PIN);
 
 

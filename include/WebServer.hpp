@@ -8,6 +8,7 @@
 #include "ConfigManager.hpp"
 #include "RecipeProcessor.hpp"
 #include "TankManager.hpp"
+#include "HX711Scale.hpp"
 #include "EPaperDisplay.hpp"
 #include <ArduinoJson.h>
 
@@ -19,7 +20,7 @@
 class WebServer {
   public:
     WebServer(DeviceState& deviceState, SemaphoreHandle_t& mutex, ConfigManager& configManager, RecipeProcessor& recipeProcessor,
-      TankManager& tankManager, EPaperDisplay& display);
+      TankManager& tankManager, HX711Scale& scale, EPaperDisplay& display);
 
     bool manageWiFiConnection();
     void startAPIServer();
@@ -33,6 +34,7 @@ class WebServer {
     ConfigManager& _configManager;
     RecipeProcessor& _recipeProcessor;
     TankManager& _tankManager;
+    HX711Scale& _scale;
     EPaperDisplay& _display;
 
     // To store the list of scanned networks

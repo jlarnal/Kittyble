@@ -300,6 +300,7 @@ The SSE endpoint provides a persistent HTTP connection for server-initiated push
 | Event | Trigger | Payload | Status |
 |-------|---------|---------|--------|
 | `tanks_changed` | Tank population changes (connect/disconnect) | `{}` | ✓ Implemented |
+| `weight` | Scale weight update (~4 Hz) | `{weight: number, raw: number}` | ✓ Implemented |
 | `status_changed` | System state transition | `{state: string}` | Planned |
 | `feeding_progress` | Weight update during feeding | `{weight: number, target: number}` | Planned |
 | `feeding_complete` | Feeding operation finished | `{success: boolean, dispensed: number}` | Planned |
@@ -310,6 +311,9 @@ The SSE endpoint provides a persistent HTTP connection for server-initiated push
 ```
 event: tanks_changed
 data: {}
+
+event: weight
+data: {"weight": 123.45, "raw": 12345678}
 
 event: status_changed
 data: {"state": "FEEDING"}
