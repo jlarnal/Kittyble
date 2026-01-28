@@ -361,7 +361,7 @@ void WebServer::_setupAPIRoutes()
       [this](AsyncWebServerRequest* r, uint8_t* d, size_t l, size_t i, size_t t) {
           _handleBody(r, d, l, i, t, [this](AsyncWebServerRequest* req, JsonDocument& doc) { this->_handleFeedRecipe(req, doc); });
       });
-    _server.on("/api/feeding/stop", HTTP_POST, std::bind(&WebServer::_handleStopFeeding, this, std::placeholders::_1));
+    _server.on("/api/feed/stop", HTTP_POST, std::bind(&WebServer::_handleStopFeeding, this, std::placeholders::_1));
     _server.on("/api/feeding/history", HTTP_GET, std::bind(&WebServer::_handleGetFeedingHistory, this, std::placeholders::_1));
 
     // Recipe Routes

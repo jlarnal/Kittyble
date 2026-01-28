@@ -260,7 +260,59 @@ Dedicated FreeRTOS task runs at 10 Hz (priority 10) performing continuous safety
 | POST | `/api/feed/immediate/{uid}` | Dispense specific weight from tank |
 | POST | `/api/feed/recipe/{uid}` | Execute recipe (optional servings param) |
 | GET | `/api/feeding/history` | Feeding history with timestamps |
-| POST | `/api/feeding/stop` | Emergency stop |
+| POST | `/api/feed/stop` | Emergency stop |
+
+#### `POST /api/feed/immediate/{uid}`
+
+Dispense a specific weight of kibble from a single tank without a recipe.
+
+- **URL parameter**: `uid` — hexadecimal string of the tank's 64-bit UID (e.g., `0123456789ABCDEF`)
+- **Request body** (JSON):
+  ```json
+  { "amount": 25.0 }
+  ```
+  | Field | Type | Required | Description |
+  |-------|------|----------|-------------|
+  | `amount` | float | Yes | Target weight to dispense, in grams. Must be > 0. |
+
+- **Responses**:
+  | Status | Body | Condition |
+  |--------|------|-----------|
+  | 202 | `{"success":true, "message":"Immediate feed command accepted"}` | Command queued |
+  | 400 | `{"error":"Invalid or missing amount"}` | Missing, non-numeric, or ≤ 0 `amount` |
+  | 429 | `{"error":"Device busy"}` | A feed command is already pending |
+  | 503 | `{"error":"Could not acquire state lock"}` | Mutex timeout |
+
+#### `POST /api/feed/recipe/{uid}`
+
+Execute a stored recipe, optionally specifying how many servings to dispense.
+
+- **URL parameter**: `uid` — decimal recipe UID (uint32)
+- **Request body** (JSON):
+  ```json
+  { "servings": 2 }
+  ```
+  | Field | Type | Required | Description |
+  |-------|------|----------|-------------|
+  | `servings` | int | No | Number of servings to dispense. Defaults to 1. |
+
+- **Responses**:
+  | Status | Body | Condition |
+  |--------|------|-----------|
+  | 202 | `{"success":true, "message":"Recipe feed command accepted"}` | Command queued |
+  | 400 | `{"error":"Invalid recipeUid"}` | UID is 0 or non-numeric |
+  | 429 | `{"error":"Device busy"}` | A feed command is already pending |
+  | 503 | `{"error":"Could not acquire state lock"}` | Mutex timeout |
+
+#### `POST /api/feed/stop`
+
+Emergency stop — immediately halts any active feeding operation. No request body required.
+
+- **Responses**:
+  | Status | Body | Condition |
+  |--------|------|-----------|
+  | 202 | `{"success":true, "message":"Stop command accepted"}` | Stop command queued |
+  | 503 | `{"error":"Could not acquire state lock"}` | Mutex timeout |
 
 ### 8.6 Recipe Endpoints
 

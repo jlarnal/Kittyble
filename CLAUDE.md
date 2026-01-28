@@ -93,3 +93,5 @@ Emergency stop: Any component can set `feedCommand.type = EMERGENCY_STOP`, check
 - The Web UI source code is segregated from this project and only relies on the FSD for its web API dependancies (README.md).
 - The hopper's idle (closed) position is ~900µs. After any feeding sequence, the hopper must be returned to the closed position for sanitary reasons.
 - The tanks' feedscrew servos idle position is set to 1500µs, while the hopper's closed and open positions are approximately 900µs and 1500µs respectively, while its angular displacement from horizontal (closed) to angled down (fully open) is somehow eased in and out. The angular range is from 0 to -32° respectively.
+
+The FSD in `./README.md` must be updated each time a change is brought to the codebase of this project.
