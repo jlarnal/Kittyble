@@ -271,9 +271,12 @@ void WebServer::startAPIServer()
     _server.addHandler(&_events);
     _tankManager.setOnTanksChangedCallback([this]() { _events.send("{}", "tanks_changed"); });
     _scale.setOnWeightChangedCallback([this](float weight, long raw) {
-        char buf[64];
-        snprintf(buf, sizeof(buf), "{\"weight\":%.2f,\"raw\":%ld}", weight, raw);
-        _events.send(buf, "weight");
+        if (_events.count() > 0) {
+            uint32_t ts = (uint32_t)(esp_timer_get_time() / 100000);
+            char buf[80];
+            snprintf(buf, sizeof(buf), "{\"weight\":%.2f,\"raw\":%ld,\"ts\":%lu}", weight, raw, ts);
+            _events.send(buf, "weight");
+        }
     });
 
     // Serve static files with Gzip support

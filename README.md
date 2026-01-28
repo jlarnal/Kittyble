@@ -55,11 +55,11 @@ Kittyble is an IoT-enabled automated pet kibble dispenser system built on the ES
 
 ### 2.3 Servo Configuration
 
-- **Hopper Servo (Channel 0):** Continuous rotation servo
-  - Open position: ~2000 PWM
-  - Closed position: ~1000 PWM
+- **Tank Servos (Channels 0-5):** Continuous rotation servos for feedscrew augers (matching bus indices)
   - Stop/Idle: ~1500 PWM
-- **Tank Servos (Channels 1-15):** Individual dispenser motors per tank
+- **Hopper Servo (Channel 6):** Positional servo controlling hopper door angle (0° closed to -32° fully open)
+  - Open position: ~1500 PWM
+  - Closed position: ~900 PWM
 
 ---
 
@@ -300,11 +300,14 @@ The SSE endpoint provides a persistent HTTP connection for server-initiated push
 | Event | Trigger | Payload | Status |
 |-------|---------|---------|--------|
 | `tanks_changed` | Tank population changes (connect/disconnect) | `{}` | ✓ Implemented |
-| `weight` | Scale weight update (~4 Hz) | `{weight: number, raw: number}` | ✓ Implemented |
+| `weight` | Scale weight update (~4 Hz) | `{weight: number, raw: number, ts: number}` | ✓ Implemented |
 | `status_changed` | System state transition | `{state: string}` | Planned |
 | `feeding_progress` | Weight update during feeding | `{weight: number, target: number}` | Planned |
 | `feeding_complete` | Feeding operation finished | `{success: boolean, dispensed: number}` | Planned |
 | `error` | Error condition detected | `{code: string, message: string}` | Planned |
+
+**Weight Event Timestamps:**
+The `ts` field is a monotonic timestamp in 100ms increments (derived from `esp_timer_get_time() / 100000`). Clients can compare consecutive `ts` values to detect and discard stale packets that arrive out-of-order due to network delays.
 
 #### Message Format
 
@@ -313,7 +316,7 @@ event: tanks_changed
 data: {}
 
 event: weight
-data: {"weight": 123.45, "raw": 12345678}
+data: {"weight": 123.45, "raw": 12345678, "ts": 1234567}
 
 event: status_changed
 data: {"state": "FEEDING"}
@@ -573,7 +576,7 @@ Custom partition table (`kibble_part.csv`) with OTA support:
 | Library | Version | Purpose |
 |---------|---------|---------|
 | ArduinoJson | 7.4.2 | JSON serialization |
-| Adafruit_EPD | 4.6.1 | E-paper display |
+| Adafruit_EPD | 4.6.4 | E-paper display |
 | Adafruit_PWMServo | 2.4.1 | Servo control |
 | ESPAsyncWebServer | master | HTTP server |
 | AsyncTCP | master | TCP handling |

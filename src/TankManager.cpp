@@ -773,7 +773,7 @@ void TankManager::setServoPower(bool on)
 
 PCA9685::I2C_Result_e TankManager::setServoPWM(uint8_t servoNum, uint16_t pwm)
 {
-    if (servoNum >= NUMBER_OF_BUSES)
+    if (servoNum >= TOTAL_SERVO_COUNT)
         return PCA9685::I2C_Result_e::I2C_Unknown;
     if (!_isServoMode)
         _switchToServoMode();
@@ -924,7 +924,7 @@ SwiMuxSerialResult_e TankManager::formatTank(uint8_t index)
     return res;
 }
 
-#ifdef KIBBLET5_DEBUG_ENABLED
+#ifdef DEBUG_MENU_ENABLED
 
 SwiMuxPresenceReport_t TankManager::testSwiMuxAwaken()
 {
@@ -1027,6 +1027,6 @@ SwiMuxSerialResult_e TankManager::testSwiMuxECC(uint8_t index, int& correctedCou
     return result;
 }
 
-#endif // KIBBLET5_DEBUG_ENABLED
+#endif // DEBUG_MENU_ENABLED
 
 #pragma endregion

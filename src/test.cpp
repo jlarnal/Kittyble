@@ -1,5 +1,5 @@
 
-#ifdef KIBBLET5_DEBUG_ENABLED
+#ifdef DEBUG_MENU_ENABLED
 
 #include <Arduino.h>
 #include <WiFi.h>
@@ -139,6 +139,85 @@ template <typename T> static String toBinaryString(const T& value)
 
 
 // --- Test Sub-menus ---
+
+/**
+ * @brief Oscillates a servo's PWM signal as a triangular wave with interactive controls.
+ * @param tankManager Reference to the TankManager for servo control
+ * @param servoNum Servo number (0-6)
+ */
+void servoOscillateMenu(TankManager& tankManager, int servoNum)
+{
+    // Constants
+    constexpr int16_t PWM_MIN = 250, PWM_MAX = 2500;
+    constexpr int16_t AMP_MIN = 1, AMP_MAX = 2250;
+    constexpr int16_t FINE_STEP = 10, COARSE_STEP = 50;
+    constexpr uint16_t FINE_TIME_STEP = 50, COARSE_TIME_STEP = 250;
+    constexpr uint16_t LOOP_INTERVAL_MS = 20;
+    constexpr uint16_t PERIOD_MIN = 100;
+
+    // State
+    int16_t offset = 1500;
+    int16_t amplitude = 1000;  // half-amplitude = 500, so range 1000-2000
+    uint16_t periodMs = 2000;
+    int8_t direction = 1;
+    float currentPwm = (float)(offset - amplitude / 2);  // start at min
+
+    // Print legend
+    Serial.printf("\n--- Servo Oscillation Test (Servo #%d) ---\n", servoNum);
+    Serial.println("[W/w] Widen   [N/n] Narrow   [U/u] Offset Up   [D/d] Offset Down");
+    Serial.println("[F/f] Faster  [S/s] Slower   [Q/q] Quit");
+    Serial.println("Uppercase = coarse (50us/250ms), lowercase = fine (10us/50ms)\n");
+
+    flushSerialInputBuffer();
+
+    while (true) {
+        // Calculate effective bounds with clipping
+        int16_t halfAmp = amplitude / 2;
+        int16_t effectiveMin = max(PWM_MIN, (int16_t)(offset - halfAmp));
+        int16_t effectiveMax = min(PWM_MAX, (int16_t)(offset + halfAmp));
+
+        // Calculate step size based on period
+        float stepsPerHalfCycle = (float)periodMs / (2.0f * LOOP_INTERVAL_MS);
+        float pwmStep = (float)(effectiveMax - effectiveMin) / stepsPerHalfCycle;
+
+        // Update PWM
+        currentPwm += direction * pwmStep;
+        if (currentPwm >= effectiveMax) { currentPwm = effectiveMax; direction = -1; }
+        if (currentPwm <= effectiveMin) { currentPwm = effectiveMin; direction = +1; }
+
+        tankManager.setServoPWM((uint8_t)servoNum, (uint16_t)currentPwm);
+
+        // Print status with \r for in-place update
+        Serial.printf("\rPWM: %4dus | Range: [%4d-%4dus] | Center: %4dus | Period: %4dms   ",
+            (int)currentPwm, effectiveMin, effectiveMax, offset, periodMs);
+
+        // Check for keypress
+        if (Serial.available()) {
+            char c = Serial.read();
+            switch (c) {
+                case 'w': amplitude = min((int16_t)(amplitude + FINE_STEP), AMP_MAX); break;
+                case 'W': amplitude = min((int16_t)(amplitude + COARSE_STEP), AMP_MAX); break;
+                case 'n': amplitude = max((int16_t)(amplitude - FINE_STEP), AMP_MIN); break;
+                case 'N': amplitude = max((int16_t)(amplitude - COARSE_STEP), AMP_MIN); break;
+                case 'u': offset = min((int16_t)(offset + FINE_STEP), PWM_MAX); break;
+                case 'U': offset = min((int16_t)(offset + COARSE_STEP), PWM_MAX); break;
+                case 'd': offset = max((int16_t)(offset - FINE_STEP), PWM_MIN); break;
+                case 'D': offset = max((int16_t)(offset - COARSE_STEP), PWM_MIN); break;
+                case 'f': periodMs = max((uint16_t)(periodMs - FINE_TIME_STEP), PERIOD_MIN); break;
+                case 'F': periodMs = max((uint16_t)(periodMs - COARSE_TIME_STEP), PERIOD_MIN); break;
+                case 's': periodMs += FINE_TIME_STEP; break;
+                case 'S': periodMs += COARSE_TIME_STEP; break;
+                case 'q':
+                case 'Q':
+                    Serial.println();
+                    return;
+            }
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(LOOP_INTERVAL_MS));
+    }
+}
+
 void servoMoveMenu(TankManager& tankManager, int numServo)
 {
 
@@ -205,6 +284,7 @@ void servoTestMenu(TankManager& tankManager)
         Serial.println("3. Set Single Servo PWM (μs)");
         Serial.println("4. Set All 8 Servos PWM (μs)");
         Serial.println("5. Set Continuous Servo Speed (-1.0 to 1.0)");
+        Serial.println("6. Oscillate Servo (Triangle Wave)");
         Serial.println("q. Back to Main Menu");
         Serial.print("Enter choice: ");
 
@@ -253,6 +333,17 @@ void servoTestMenu(TankManager& tankManager)
                     float speed = readSerialFloat();
                     tankManager.setContinuousServo(servoNum, speed);
                     Serial.printf("Set continuous servo %d to speed %.2f.\n", servoNum, speed);
+                    break;
+                }
+            case '6':
+                {
+                    Serial.print("Enter Servo Number (0-6): ");
+                    int servoNum = readSerialInt();
+                    if (servoNum < 0 || servoNum > 6) {
+                        Serial.println("Invalid servo number.");
+                        break;
+                    }
+                    servoOscillateMenu(tankManager, servoNum);
                     break;
                 }
             case 'q':
@@ -1031,4 +1122,4 @@ void doDebugTest(TankManager& tankManager, HX711Scale& scale)
     }
 }
 
-#endif // defined(KIBBLET5_DEBUG_ENABLED)
+#endif // defined(DEBUG_MENU_ENABLED)

@@ -22,6 +22,11 @@ struct DeviceState;
 #define DEFAULT_HOPPER_CLOSED_PWM 1000
 #define DEFAULT_HOPPER_OPEN_PWM   2000
 
+// Hopper servo is on PCA9685 channel 6 (tank augers use 0-5)
+#define HOPPER_SERVO_INDEX (NUMBER_OF_BUSES)
+#define TOTAL_SERVO_COUNT  (NUMBER_OF_BUSES + 1)
+
+
 
 /** @brief Internal record structure for Tank EEPROM */
 struct __attribute__((packed)) TankHistory_t {
@@ -218,8 +223,13 @@ class TankManager {
     void setServoPower(bool on);
     PCA9685::I2C_Result_e setContinuousServo(uint8_t servoNum, float speed); // speed from -1.0 to 1.0
     PCA9685::I2C_Result_e stopAllServos();
-    PCA9685::I2C_Result_e openHopper() { return setServoPWM(0, _hopperOpenPwm); }
-    PCA9685::I2C_Result_e closeHopper() { return setServoPWM(0, _hopperClosedPwm); }
+    PCA9685::I2C_Result_e setServoPWM(uint8_t servoNum, uint16_t pwm);
+    PCA9685::I2C_Result_e openHopper() { return setServoPWM(HOPPER_SERVO_INDEX, _hopperOpenPwm); }
+    PCA9685::I2C_Result_e closeHopper() { return setServoPWM(HOPPER_SERVO_INDEX, _hopperClosedPwm); }
+
+    // --- Hopper PWM Getters ---
+    uint16_t getHopperOpenPwm() const { return _hopperOpenPwm; }
+    uint16_t getHopperClosedPwm() const { return _hopperClosedPwm; }
 
     SwiMuxSerialResult_e swiRead(uint8_t busIndex, uint16_t address, uint8_t* dataOut, uint16_t length);
     SwiMuxSerialResult_e formatTank(uint8_t index);
@@ -227,9 +237,9 @@ class TankManager {
 
   private:
     friend struct TankEEpromData_t;
-#ifdef KIBBLET5_DEBUG_ENABLED
+#ifdef DEBUG_MENU_ENABLED
     friend void swiMuxMenu(TankManager& tankManager);
-    friend void servoTestMenu(TankManager& tankManager), servoMoveMenu(TankManager& tankManager, int numServo);
+    friend void servoTestMenu(TankManager& tankManager), servoMoveMenu(TankManager& tankManager, int numServo), servoOscillateMenu(TankManager& tankManager, int servoNum);
     friend void doReadTest(TankManager& tankManager, int busIndex);
     friend void doWriteTest(TankManager& tankManager, int busIndex);
 
@@ -270,8 +280,6 @@ class TankManager {
     // --- PCA9685 Mode Switching Helpers ---
     void _switchToSwiMode();
     void _switchToServoMode();
-    // Servo control private methods.
-    PCA9685::I2C_Result_e setServoPWM(uint8_t servoNum, uint16_t pwm);
 
 
     inline void fullRefresh() { refresh(0xFFFF); }

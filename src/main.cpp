@@ -41,9 +41,9 @@ enum class SerialCmdState : uint8_t
 };
 static SerialCmdState serialCmdState = SerialCmdState::IDLE;
 
-#if !defined(KIBBLET5_DEBUG_ENABLED) && defined(LOG_TO_FILE_ENABLED)
+#if !defined(DEBUG_MENU_ENABLED) && defined(LOG_TO_FILE_ENABLED)
 #define LOG_TO_SPIFFS
-#elif defined(KIBBLET5_DEBUG_ENABLED)
+#elif defined(DEBUG_MENU_ENABLED)
 static void printSPIFFSTree(fs::FS& fs, const char* path, uint8_t depth = 0);
 #endif
 
@@ -127,7 +127,7 @@ void setup()
     tankManager.begin(hopper_closed, hopper_open);
     scale.begin(HX711_DATA_PIN, HX711_CLOCK_PIN);
 
-#ifdef KIBBLET5_DEBUG_ENABLED
+#ifdef DEBUG_MENU_ENABLED
     // --- RUN DIAGNOSTIC AND TEST CLI ---
     Serial.print("\r\n=== Content of the SPIFFS partition ===\r\n");
     printSPIFFSTree(SPIFFS, "/");
@@ -401,7 +401,7 @@ void feedingTask(void* pvParameters)
     }
 }
 
-#ifdef KIBBLET5_DEBUG_ENABLED
+#ifdef DEBUG_MENU_ENABLED
 static void printIndent(uint8_t depth)
 {
     for (uint8_t i = 0; i < depth; ++i)
